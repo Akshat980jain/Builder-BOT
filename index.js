@@ -26,7 +26,7 @@ function createBot() {
             host: SERVER_HOST,
             port: SERVER_PORT,
             username: BOT_USERNAME,
-            version: '26.2',
+            version: '1.21.4',
             protocolVersion: 776,
             checkTimeoutInterval: 120000,
             keepAlive: true,
