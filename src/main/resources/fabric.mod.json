@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "id": "builderbot",
+  "version": "${version}",
+  "name": "Builder Bot",
+  "description": "A custom PathAwareEntity that autonomously walks to positions and places blocks to construct structures from Structure NBT files.",
+  "authors": [
+    "YourName"
+  ],
+  "contact": {
+    "homepage": "",
+    "sources": ""
+  },
+  "license": "MIT",
+  "icon": "assets/builderbot/icon.png",
+  "environment": "*",
+  "entrypoints": {
+    "main": [
+      "com.example.builderbot.BuilderBotMod"
+    ],
+    "client": [
+      "com.example.builderbot.client.BuilderBotClient"
+    ]
+  },
+  "mixins": [],
+  "depends": {
+    "fabricloader": ">=0.19.3",
+    "minecraft": "*",
+    "java": ">=21",
+    "fabric-api": "*"
+  },
+  "suggests": {}
+}

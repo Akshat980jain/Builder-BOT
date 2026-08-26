@@ -1,0 +1,14 @@
+.gradle/
+build/
+out/
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Loom caches
+.loom/
+
+# OS files
+.DS_Store
+Thumbs.db
