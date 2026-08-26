@@ -1,7 +1,6 @@
 // ── PROTOCOL & SNAPSHOT COMPATIBILITY POLYFILL ──────────────────────────────
-// Fixes "unsupported protocol version: 26.2" by aliasing snapshot versions to the latest Minecraft protocol
+const mcData = require('minecraft-data');
 try {
-    const mcData = require('minecraft-data');
     const pcVersions = mcData.supportedVersions ? mcData.supportedVersions.pc : [];
     const latestVersion = pcVersions[pcVersions.length - 1] || '1.21.4';
     const latestData = mcData(latestVersion);
@@ -17,10 +16,9 @@ try {
                 mcData.supportedVersions.pc.push(snap);
             }
         }
-        console.log(`[Version Compatibility] Registered 26.2 snapshot support alias (mapped to ${latestVersion}).`);
     }
 } catch (e) {
-    console.log('[Version Compatibility Notice]', e.message);
+    console.log('[Polyfill Notice]', e.message);
 }
 
 const mineflayer = require('mineflayer');
@@ -28,14 +26,15 @@ const { pathfinder, Movements, goals } = require('mineflayer-pathfinder');
 const express = require('express');
 const Builder = require('./builder');
 
-// Configuration from Environment Variables (set in Railway Dashboard)
+// Configuration from Environment Variables
 const SERVER_HOST = process.env.SERVER_HOST || 'localhost';
 const SERVER_PORT = parseInt(process.env.SERVER_PORT || '25565');
 const BOT_USERNAME = process.env.BOT_NAME || 'BuilderBot';
-// If BOT_VERSION is "26.2" or not set, default to auto-fallback
-const RAW_VERSION = process.env.BOT_VERSION || '1.21.4';
-const BOT_VERSION = (RAW_VERSION === '26.2' || RAW_VERSION === 'false') ? '1.21.4' : RAW_VERSION;
 const WEB_PORT = process.env.PORT || 3000;
+
+// Supported protocol versions to try in sequence
+const PROTOCOL_CANDIDATES = ['1.21.4', '1.21.1', '1.21', '1.20.4'];
+let candidateIndex = 0;
 
 let bot = null;
 let builder = null;
@@ -43,15 +42,19 @@ let reconnectTimer = null;
 let botStatus = 'Initializing...';
 
 function createBot() {
-    console.log(`[Bot] Connecting to ${SERVER_HOST}:${SERVER_PORT} as ${BOT_USERNAME} (Protocol: ${BOT_VERSION})...`);
-    botStatus = `Connecting to ${SERVER_HOST}:${SERVER_PORT}...`;
+    const currentVersion = process.env.BOT_VERSION && process.env.BOT_VERSION !== '26.2' && process.env.BOT_VERSION !== 'false'
+        ? process.env.BOT_VERSION
+        : PROTOCOL_CANDIDATES[candidateIndex % PROTOCOL_CANDIDATES.length];
+
+    console.log(`[Bot] Connecting to ${SERVER_HOST}:${SERVER_PORT} as ${BOT_USERNAME} (Protocol: ${currentVersion})...`);
+    botStatus = `Connecting as ${BOT_USERNAME} (${currentVersion})...`;
 
     try {
         bot = mineflayer.createBot({
             host: SERVER_HOST,
             port: SERVER_PORT,
             username: BOT_USERNAME,
-            version: BOT_VERSION,
+            version: currentVersion,
             checkTimeoutInterval: 60000,
             keepAlive: true,
             hideErrors: false
@@ -61,7 +64,7 @@ function createBot() {
         builder = new Builder(bot);
 
         bot.on('spawn', () => {
-            console.log(`[Bot] ${BOT_USERNAME} successfully spawned into world!`);
+            console.log(`[Bot] 🎉 ${BOT_USERNAME} successfully joined the world!`);
             botStatus = 'Online (In World)';
             bot.chat(`🤖 ${BOT_USERNAME} is online and ready! Type !help for commands.`);
         });
@@ -74,6 +77,7 @@ function createBot() {
         bot.on('kicked', (reason) => {
             console.log(`[Bot] Kicked from server: ${reason}`);
             botStatus = `Kicked: ${reason}`;
+            candidateIndex++;
             scheduleReconnect();
         });
 
@@ -86,23 +90,22 @@ function createBot() {
         bot.on('error', (err) => {
             console.error('[Bot Error]', err.message);
             botStatus = `Error: ${err.message}`;
-            if (err.message && err.message.includes('version')) {
-                console.log('[Bot] Version mismatch detected. Retrying with fallback protocol...');
-            }
+            candidateIndex++;
         });
     } catch (err) {
         console.error('[Bot Init Error]', err.message);
+        candidateIndex++;
         scheduleReconnect();
     }
 }
 
 function scheduleReconnect() {
     if (reconnectTimer) return;
-    console.log('[Bot] Will attempt reconnect in 15 seconds...');
+    console.log('[Bot] Reconnecting in 10 seconds...');
     reconnectTimer = setTimeout(() => {
         reconnectTimer = null;
         createBot();
-    }, 15000);
+    }, 10000);
 }
 
 function handleCommand(username, message) {
@@ -116,18 +119,18 @@ function handleCommand(username, message) {
     const playerPos = player && player.entity ? player.entity.position.floored() : (bot.entity ? bot.entity.position.floored() : null);
 
     if (!playerPos && ['come', 'follow', 'pyramid', 'dome', 'tower', 'cube'].includes(cmd)) {
-        bot.chat('❌ Cannot locate your position.');
+        bot.chat('❌ Cannot locate your position in world.');
         return;
     }
 
     switch (cmd) {
         case 'help':
-            bot.chat('📜 Commands: !pyramid <size>, !dome <radius>, !tower <radius> <height>, !cube <size>, !undo, !come, !follow, !stop, !status');
+            bot.chat('📜 Commands: !pyramid <size>, !dome <radius>, !tower <r> <h>, !cube <size>, !undo, !come, !follow, !stop, !status');
             break;
 
         case 'come':
             if (!player || !player.entity) {
-                bot.chat('❌ I cannot see you.');
+                bot.chat('❌ Cannot see you.');
                 return;
             }
             bot.chat(`🏃 Coming to ${username}...`);
@@ -136,7 +139,7 @@ function handleCommand(username, message) {
 
         case 'follow':
             if (!player || !player.entity) {
-                bot.chat('❌ I cannot see you.');
+                bot.chat('❌ Cannot see you.');
                 return;
             }
             bot.chat(`🚶 Following ${username}...`);
@@ -146,7 +149,7 @@ function handleCommand(username, message) {
         case 'stop':
             bot.pathfinder.stop();
             if (builder) builder.stop();
-            bot.chat('⏹ All tasks stopped.');
+            bot.chat('⏹ Tasks stopped.');
             break;
 
         case 'pyramid':
@@ -182,19 +185,19 @@ function handleCommand(username, message) {
             const stat = builder.getStatus();
             if (stat.status === 'Idle') {
                 const posStr = bot.entity ? `(${Math.round(bot.entity.position.x)}, ${Math.round(bot.entity.position.y)}, ${Math.round(bot.entity.position.z)})` : 'unknown';
-                bot.chat(`🟢 Bot is idle at ${posStr}`);
+                bot.chat(`🟢 Idle at ${posStr}`);
             } else {
                 bot.chat(`🔨 Building ${stat.project}: ${stat.placed}/${stat.total} blocks (${stat.percent}%)`);
             }
             break;
 
         default:
-            bot.chat(`❓ Unknown command '!${cmd}'. Type !help for list of commands.`);
+            bot.chat(`❓ Unknown command '!${cmd}'. Type !help for commands.`);
             break;
     }
 }
 
-// ── EXPRESS WEB DASHBOARD (FOR RAILWAY) ──────────────────────────────────────
+// ── EXPRESS WEB DASHBOARD ────────────────────────────────────────────────────
 const app = express();
 
 app.get('/', (req, res) => {
