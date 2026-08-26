@@ -39,7 +39,20 @@ if (patchedMcData.versions && patchedMcData.versions.pc) {
     }
 }
 require.cache[mcDataCacheKey].exports = patchedMcData;
-console.log('[Native 26.2 Patch] Protocol 776 registered in require.cache.');
+
+// Patch mineflayer's internal supportedVersions check
+try {
+    const mfVersionModule = require('mineflayer/lib/version');
+    if (mfVersionModule && mfVersionModule.supportedVersions) {
+        if (!mfVersionModule.supportedVersions.includes('26.2')) {
+            mfVersionModule.supportedVersions.push('26.2');
+        }
+    }
+} catch (e) {
+    console.log('[Mineflayer Version Patch Notice]', e.message);
+}
+
+console.log('[Native 26.2 Patch] Protocol 776 & Mineflayer 26.2 validation unlocked.');
 
 const mineflayer = require('mineflayer');
 const { pathfinder, Movements, goals } = require('mineflayer-pathfinder');
