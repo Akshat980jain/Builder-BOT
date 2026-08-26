@@ -1,100 +1,118 @@
 // patch-mineflayer.js — Runs during Docker build
-// Permanently patches mineflayer, minecraft-protocol, and minecraft-data for Minecraft 26.2
+// Cleanly registers Minecraft 26.2 (Protocol 776) inside minecraft-data
 
 const fs = require('fs');
 const path = require('path');
 
-// ── 1. Patch mineflayer/lib/loader.js ────────────────────────────────────────
-const loaderPath = path.join(__dirname, 'node_modules', 'mineflayer', 'lib', 'loader.js');
-if (fs.existsSync(loaderPath)) {
-    let src = fs.readFileSync(loaderPath, 'utf8');
-    src = src.replace(
-        /if\s*\(!mcData\)\s*throw\s*new\s*Error\([^;]+\);?/g,
-        "if (!mcData) { const _fb = require('minecraft-data').supportedVersions.pc.slice(-1)[0]; mcData = require('minecraft-data')(_fb); console.log('[Patch] mineflayer: using fallback ' + _fb); }"
-    );
-    fs.writeFileSync(loaderPath, src, 'utf8');
-    console.log('[Patch] mineflayer/lib/loader.js ✅ patched');
-} else {
-    console.log('[Patch WARN] mineflayer/lib/loader.js not found');
+const mcDataDir = path.join(__dirname, 'node_modules', 'minecraft-data');
+
+// ── 1. Update dataPaths.json if it exists ───────────────────────────────────
+const dataPathsFile = path.join(mcDataDir, 'data', 'dataPaths.json');
+if (fs.existsSync(dataPathsFile)) {
+    try {
+        const dataPaths = JSON.parse(fs.readFileSync(dataPathsFile, 'utf8'));
+        if (dataPaths.pc) {
+            const pcVersions = Object.keys(dataPaths.pc);
+            const latestVer = pcVersions[pcVersions.length - 1];
+            if (latestVer && !dataPaths.pc['26.2']) {
+                dataPaths.pc['26.2'] = Object.assign({}, dataPaths.pc[latestVer]);
+                fs.writeFileSync(dataPathsFile, JSON.stringify(dataPaths, null, 2), 'utf8');
+                console.log(`[Patch] dataPaths.json: registered 26.2 mapped to ${latestVer}`);
+            }
+        }
+    } catch (err) {
+        console.log('[Patch Notice] dataPaths.json:', err.message);
+    }
 }
 
-// ── 2. Patch minecraft-protocol/src/createClient.js ──────────────────────────
-const createClientPath = path.join(__dirname, 'node_modules', 'minecraft-protocol', 'src', 'createClient.js');
-if (fs.existsSync(createClientPath)) {
-    let src = fs.readFileSync(createClientPath, 'utf8');
-    
-    // Change const mcData to let mcData
-    src = src.replace('const mcData =', 'let mcData =');
-    
-    // Replace the throw with safe fallback
-    src = src.replace(
-        /if\s*\(!mcData\)\s*throw\s*new\s*Error\([^;]+\);?/g,
-        "if (!mcData) { const _fb = require('minecraft-data').supportedVersions.pc.slice(-1)[0]; console.log('[Patch] minecraft-protocol: using fallback ' + _fb); mcData = require('minecraft-data')(_fb); }"
-    );
-    
-    fs.writeFileSync(createClientPath, src, 'utf8');
-    console.log('[Patch] minecraft-protocol/src/createClient.js ✅ patched');
-} else {
-    console.log('[Patch WARN] createClient.js not found');
+// ── 2. Update protocolVersions.json if it exists ─────────────────────────────
+const protocolVersionsFile = path.join(mcDataDir, 'data', 'pc', 'common', 'protocolVersions.json');
+if (fs.existsSync(protocolVersionsFile)) {
+    try {
+        const protoList = JSON.parse(fs.readFileSync(protocolVersionsFile, 'utf8'));
+        if (Array.isArray(protoList)) {
+            const exists = protoList.some(v => v.minecraftVersion === '26.2' || v.version === 776);
+            if (!exists) {
+                protoList.unshift({
+                    minecraftVersion: '26.2',
+                    version: 776,
+                    dataVersion: 4903,
+                    usesNetty: true,
+                    majorVersion: '26.2'
+                });
+                fs.writeFileSync(protocolVersionsFile, JSON.stringify(protoList, null, 2), 'utf8');
+                console.log('[Patch] protocolVersions.json: registered Protocol 776 for 26.2');
+            }
+        }
+    } catch (err) {
+        console.log('[Patch Notice] protocolVersions.json:', err.message);
+    }
 }
 
-// ── 3. Patch minecraft-protocol/src/client/versionChecking.js ───────────
-const versionCheckPath = path.join(__dirname, 'node_modules', 'minecraft-protocol', 'src', 'client', 'versionChecking.js');
-if (fs.existsSync(versionCheckPath)) {
-    let src = fs.readFileSync(versionCheckPath, 'utf8');
-    src = src.replace(
-        /throw\s*new\s*Error\s*\([^)]*incompatible[^)]*\);?/gi,
-        "console.log('[Patch] versionChecking: suppressed version error');"
-    );
-    src = src.replace(
-        /client\.end\s*\([^)]*incompatible[^)]*\);?/gi,
-        "console.log('[Patch] versionChecking: suppressed disconnect');"
-    );
-    fs.writeFileSync(versionCheckPath, src, 'utf8');
-    console.log('[Patch] minecraft-protocol/src/client/versionChecking.js ✅ patched');
-} else {
-    console.log('[Patch WARN] versionChecking.js not found');
-}
-
-// ── 4. Inject 26.2 (Protocol 776) into minecraft-data ────────────────────────
-const mcDataPath = path.join(__dirname, 'node_modules', 'minecraft-data');
-const candidates = [
-    path.join(mcDataPath, 'minecraft-data.js'),
-    path.join(mcDataPath, 'lib', 'index.js'),
-    path.join(mcDataPath, 'index.js')
+// ── 3. Cleanly wrap minecraft-data entry point ───────────────────────────────
+const mcIndexCandidates = [
+    path.join(mcDataDir, 'index.js'),
+    path.join(mcDataDir, 'minecraft-data.js'),
+    path.join(mcDataDir, 'lib', 'index.js')
 ];
-const targetMcDataPath = candidates.find(p => fs.existsSync(p));
 
-if (targetMcDataPath) {
-    let src = fs.readFileSync(targetMcDataPath, 'utf8');
-    if (!src.includes('PATCH_26_2')) {
-        src += `
-// ── PATCH_26_2: Minecraft 26.2 Protocol 776 ──────────────────────────────────
-try {
-    const _exp = module.exports;
-    if (_exp && _exp.versions && _exp.versions.pc && _exp.supportedVersions) {
-        const _latest = _exp.supportedVersions.pc[_exp.supportedVersions.pc.length - 1];
-        _exp.versions.pc['26.2'] = Object.assign({}, _exp.versions.pc[_latest] || {}, {
+for (const indexPath of mcIndexCandidates) {
+    if (fs.existsSync(indexPath)) {
+        let src = fs.readFileSync(indexPath, 'utf8');
+        if (!src.includes('WRAPPER_26_2')) {
+            src += `
+// ── WRAPPER_26_2: Auto-fallback for Minecraft 26.2 (Protocol 776) ─────────────
+(function() {
+    const _origExport = module.exports;
+    const _wrapped = function(version) {
+        if (version === '26.2' || version === 776 || version === '776' || version === false || version === undefined) {
+            const _latest = (_origExport.supportedVersions && _origExport.supportedVersions.pc)
+                ? _origExport.supportedVersions.pc[_origExport.supportedVersions.pc.length - 1]
+                : '1.21.4';
+            const _baseData = _origExport(_latest);
+            if (_baseData) {
+                return Object.assign({}, _baseData, {
+                    version: Object.assign({}, _baseData.version, {
+                        minecraftVersion: '26.2',
+                        version: 776,
+                        majorVersion: '26.2',
+                        dataVersion: 4903
+                    })
+                });
+            }
+        }
+        try {
+            return _origExport(version);
+        } catch(e) {
+            const _latest = (_origExport.supportedVersions && _origExport.supportedVersions.pc)
+                ? _origExport.supportedVersions.pc[_origExport.supportedVersions.pc.length - 1]
+                : '1.21.4';
+            return _origExport(_latest);
+        }
+    };
+    Object.assign(_wrapped, _origExport);
+    if (_wrapped.supportedVersions && _wrapped.supportedVersions.pc) {
+        if (!_wrapped.supportedVersions.pc.includes('26.2')) {
+            _wrapped.supportedVersions.pc.push('26.2');
+        }
+    }
+    if (_wrapped.versions && _wrapped.versions.pc) {
+        const _latest = _wrapped.supportedVersions.pc[_wrapped.supportedVersions.pc.length - 1];
+        _wrapped.versions.pc['26.2'] = Object.assign({}, _wrapped.versions.pc[_latest] || {}, {
             minecraftVersion: '26.2',
             version: 776,
             majorVersion: '26.2',
             dataVersion: 4903
         });
-        if (!_exp.supportedVersions.pc.includes('26.2')) {
-            _exp.supportedVersions.pc.push('26.2');
-        }
-        console.log('[Patch] minecraft-data: 26.2 (Protocol 776) registered.');
     }
-} catch(_e) { console.log('[Patch] minecraft-data inject error:', _e.message); }
-// ─────────────────────────────────────────────────────────────────────────────
+    module.exports = _wrapped;
+})();
 `;
-        fs.writeFileSync(targetMcDataPath, src, 'utf8');
-        console.log('[Patch] minecraft-data ✅ patched at', targetMcDataPath);
-    } else {
-        console.log('[Patch] minecraft-data already patched.');
+            fs.writeFileSync(indexPath, src, 'utf8');
+            console.log('[Patch] minecraft-data entry point wrapped at:', indexPath);
+        }
+        break;
     }
-} else {
-    console.log('[Patch WARN] minecraft-data entry point not found');
 }
 
-console.log('[Patch] ✅ ALL patches complete. Minecraft 26.2 (Protocol 776) fully supported.');
+console.log('[Patch] ✅ 26.2 Protocol 776 data injection complete.');
