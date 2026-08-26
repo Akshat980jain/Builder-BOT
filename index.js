@@ -26,7 +26,7 @@ function createBot() {
             host: SERVER_HOST,
             port: SERVER_PORT,
             username: BOT_USERNAME,
-            version: '1.21.4',
+            version: '26.2',
             protocolVersion: 776,
             checkTimeoutInterval: 120000,
             keepAlive: true,
@@ -42,7 +42,7 @@ function createBot() {
             setTimeout(() => {
                 try {
                     bot.chat(`🤖 ${BOT_USERNAME} (26.2) is online! Type !help for commands.`);
-                } catch (e) {}
+                } catch (e) { }
             }, 1500);
         });
 
@@ -54,7 +54,7 @@ function createBot() {
             if (cleanMsg.includes('!')) {
                 const cmdIndex = cleanMsg.indexOf('!');
                 const commandText = cleanMsg.substring(cmdIndex);
-                
+
                 let author = '';
                 if (cleanMsg.includes('<') && cleanMsg.includes('>')) {
                     author = cleanMsg.substring(cleanMsg.indexOf('<') + 1, cleanMsg.indexOf('>')).trim();
