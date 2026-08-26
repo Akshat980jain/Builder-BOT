@@ -1,25 +1,50 @@
-// ── PROTOCOL & SNAPSHOT COMPATIBILITY POLYFILL ──────────────────────────────
-const mcData = require('minecraft-data');
-try {
-    const pcVersions = mcData.supportedVersions ? mcData.supportedVersions.pc : [];
-    const latestVersion = pcVersions[pcVersions.length - 1] || '1.21.4';
-    const latestData = mcData(latestVersion);
+// ── NATIVE MINECRAFT 26.2 (PROTOCOL 776) SNAPSHOT HOOK ──────────────────────
+const Module = require('module');
+const originalRequire = Module.prototype.require;
 
-    if (latestData && latestData.version) {
-        const snapshotVersions = ['26.2', '26w', '25w', '24w', '1.21.5'];
-        for (const snap of snapshotVersions) {
-            if (!mcData.versions.pc[snap]) {
-                mcData.versions.pc[snap] = {
-                    ...latestData.version,
-                    minecraftVersion: snap
+let mcDataPatchApplied = false;
+Module.prototype.require = function(path) {
+    const exported = originalRequire.apply(this, arguments);
+    if ((path === 'minecraft-data' || path.endsWith('/minecraft-data')) && !mcDataPatchApplied) {
+        mcDataPatchApplied = true;
+        const origFunc = exported;
+        const patchedFunc = function(version) {
+            if (version === '26.2' || version === 776 || version === '776') {
+                const latest = origFunc.supportedVersions.pc[origFunc.supportedVersions.pc.length - 1];
+                const data = origFunc(latest);
+                return {
+                    ...data,
+                    version: {
+                        ...data.version,
+                        minecraftVersion: '26.2',
+                        version: 776,
+                        majorVersion: '26.2',
+                        dataVersion: 4903
+                    }
                 };
-                mcData.supportedVersions.pc.push(snap);
+            }
+            return origFunc(version);
+        };
+        Object.assign(patchedFunc, origFunc);
+        if (patchedFunc.versions && patchedFunc.versions.pc) {
+            const latest = patchedFunc.supportedVersions.pc[patchedFunc.supportedVersions.pc.length - 1];
+            const baseVer = patchedFunc.versions.pc[latest];
+            patchedFunc.versions.pc['26.2'] = {
+                ...baseVer,
+                minecraftVersion: '26.2',
+                version: 776,
+                majorVersion: '26.2',
+                dataVersion: 4903
+            };
+            if (!patchedFunc.supportedVersions.pc.includes('26.2')) {
+                patchedFunc.supportedVersions.pc.push('26.2');
             }
         }
+        console.log('[Native 26.2 Hook] Injected Protocol 776 definitions for Minecraft 26.2.');
+        return patchedFunc;
     }
-} catch (e) {
-    console.log('[Polyfill Notice]', e.message);
-}
+    return exported;
+};
 
 const mineflayer = require('mineflayer');
 const { pathfinder, Movements, goals } = require('mineflayer-pathfinder');
@@ -31,10 +56,7 @@ const SERVER_HOST = process.env.SERVER_HOST || 'localhost';
 const SERVER_PORT = parseInt(process.env.SERVER_PORT || '25565');
 const BOT_USERNAME = process.env.BOT_NAME || 'BuilderBot';
 const WEB_PORT = process.env.PORT || 3000;
-
-const PROTOCOL_VERSION = process.env.BOT_VERSION && process.env.BOT_VERSION !== '26.2' && process.env.BOT_VERSION !== 'false'
-    ? process.env.BOT_VERSION
-    : '1.21.4';
+const BOT_VERSION = '26.2'; // Native 26.2 Protocol 776
 
 let bot = null;
 let builder = null;
@@ -42,7 +64,7 @@ let reconnectTimer = null;
 let botStatus = 'Initializing...';
 
 function createBot() {
-    console.log(`[Bot] Connecting to ${SERVER_HOST}:${SERVER_PORT} as ${BOT_USERNAME} (Protocol: ${PROTOCOL_VERSION})...`);
+    console.log(`[Bot] Connecting to ${SERVER_HOST}:${SERVER_PORT} as ${BOT_USERNAME} on Native Minecraft 26.2 (Protocol: 776)...`);
     botStatus = `Connecting to ${SERVER_HOST}:${SERVER_PORT}...`;
 
     try {
@@ -50,36 +72,34 @@ function createBot() {
             host: SERVER_HOST,
             port: SERVER_PORT,
             username: BOT_USERNAME,
-            version: PROTOCOL_VERSION,
+            version: BOT_VERSION,
             checkTimeoutInterval: 120000,
             keepAlive: true,
-            hideErrors: true // Suppresses non-fatal custom sound / ad packet warnings
+            hideErrors: true
         });
 
         bot.loadPlugin(pathfinder);
         builder = new Builder(bot);
 
         bot.on('spawn', () => {
-            console.log(`[Bot] 🎉 ${BOT_USERNAME} is ONLINE in the world!`);
+            console.log(`[Bot] 🎉 ${BOT_USERNAME} successfully joined world on 26.2!`);
             botStatus = 'Online (In World)';
             setTimeout(() => {
                 try {
-                    bot.chat(`🤖 ${BOT_USERNAME} online! Type !help for building commands.`);
+                    bot.chat(`🤖 ${BOT_USERNAME} (26.2) is online! Type !help for commands.`);
                 } catch (e) {}
             }, 1500);
         });
 
-        // 1. Modern Minecraft 1.20 - 1.21+ Signed Chat Handler
-        bot.on('messagestr', (message, position, jsonMsg) => {
+        // Signed Chat & Modern System Chat Handler
+        bot.on('messagestr', (message) => {
             const cleanMsg = message.trim();
-            console.log(`[Server Chat] ${cleanMsg}`);
+            console.log(`[Chat] ${cleanMsg}`);
 
-            // Look for commands like "!help", "!pyramid", etc.
             if (cleanMsg.includes('!')) {
                 const cmdIndex = cleanMsg.indexOf('!');
                 const commandText = cleanMsg.substring(cmdIndex);
                 
-                // Extract author if available
                 let author = '';
                 if (cleanMsg.includes('<') && cleanMsg.includes('>')) {
                     author = cleanMsg.substring(cleanMsg.indexOf('<') + 1, cleanMsg.indexOf('>')).trim();
@@ -91,7 +111,7 @@ function createBot() {
             }
         });
 
-        // 2. Legacy Chat Handler (Fallback)
+        // Fallback chat
         bot.on('chat', (username, message) => {
             if (username === bot.username) return;
             handleCommand(username, message.trim());
@@ -99,20 +119,19 @@ function createBot() {
 
         bot.on('kicked', (reason) => {
             const reasonStr = typeof reason === 'object' ? JSON.stringify(reason) : String(reason);
-            console.log(`[Bot] Kicked from server: ${reasonStr}`);
+            console.log(`[Bot] Disconnected/Kicked: ${reasonStr}`);
             botStatus = `Kicked: ${reasonStr}`;
             scheduleReconnect();
         });
 
         bot.on('end', () => {
-            console.log('[Bot] Disconnected from server.');
+            console.log('[Bot] Connection ended.');
             botStatus = 'Disconnected. Retrying...';
             scheduleReconnect();
         });
 
         bot.on('error', (err) => {
-            console.log('[Bot Warning]', err.message);
-            // Non-fatal error; keep session alive if possible
+            console.log('[Bot Notice]', err.message);
         });
 
     } catch (err) {
@@ -137,10 +156,15 @@ function handleCommand(username, message) {
     const cmd = parts[0].toLowerCase();
     const args = parts.slice(1);
 
-    console.log(`[Command Triggered] !${cmd} with args:`, args);
+    console.log(`[Executing Command] !${cmd} with args:`, args);
 
     const player = username ? bot.players[username] : null;
     const playerPos = player && player.entity ? player.entity.position.floored() : (bot.entity ? bot.entity.position.floored() : null);
+
+    if (!playerPos && ['come', 'follow', 'pyramid', 'dome', 'tower', 'cube'].includes(cmd)) {
+        bot.chat('❌ Cannot locate your position in world.');
+        return;
+    }
 
     switch (cmd) {
         case 'help':
@@ -149,7 +173,7 @@ function handleCommand(username, message) {
 
         case 'come':
             if (!player || !player.entity) {
-                bot.chat('❌ I cannot see you. Stand closer to me.');
+                bot.chat('❌ Cannot see you. Stand closer.');
                 return;
             }
             bot.chat(`🏃 Coming to you...`);
@@ -158,7 +182,7 @@ function handleCommand(username, message) {
 
         case 'follow':
             if (!player || !player.entity) {
-                bot.chat('❌ I cannot see you. Stand closer to me.');
+                bot.chat('❌ Cannot see you. Stand closer.');
                 return;
             }
             bot.chat(`🚶 Following you...`);
