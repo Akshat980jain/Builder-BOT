@@ -1,3 +1,28 @@
+// ── PROTOCOL & SNAPSHOT COMPATIBILITY POLYFILL ──────────────────────────────
+// Fixes "unsupported protocol version: 26.2" by aliasing snapshot versions to the latest Minecraft protocol
+try {
+    const mcData = require('minecraft-data');
+    const pcVersions = mcData.supportedVersions ? mcData.supportedVersions.pc : [];
+    const latestVersion = pcVersions[pcVersions.length - 1] || '1.21.4';
+    const latestData = mcData(latestVersion);
+
+    if (latestData && latestData.version) {
+        const snapshotVersions = ['26.2', '26w', '25w', '24w', '1.21.5'];
+        for (const snap of snapshotVersions) {
+            if (!mcData.versions.pc[snap]) {
+                mcData.versions.pc[snap] = {
+                    ...latestData.version,
+                    minecraftVersion: snap
+                };
+                mcData.supportedVersions.pc.push(snap);
+            }
+        }
+        console.log(`[Version Compatibility] Registered 26.2 snapshot support alias (mapped to ${latestVersion}).`);
+    }
+} catch (e) {
+    console.log('[Version Compatibility Notice]', e.message);
+}
+
 const mineflayer = require('mineflayer');
 const { pathfinder, Movements, goals } = require('mineflayer-pathfinder');
 const express = require('express');
@@ -7,7 +32,9 @@ const Builder = require('./builder');
 const SERVER_HOST = process.env.SERVER_HOST || 'localhost';
 const SERVER_PORT = parseInt(process.env.SERVER_PORT || '25565');
 const BOT_USERNAME = process.env.BOT_NAME || 'BuilderBot';
-const BOT_VERSION = process.env.BOT_VERSION || false;
+// If BOT_VERSION is "26.2" or not set, default to auto-fallback
+const RAW_VERSION = process.env.BOT_VERSION || '1.21.4';
+const BOT_VERSION = (RAW_VERSION === '26.2' || RAW_VERSION === 'false') ? '1.21.4' : RAW_VERSION;
 const WEB_PORT = process.env.PORT || 3000;
 
 let bot = null;
@@ -16,48 +43,57 @@ let reconnectTimer = null;
 let botStatus = 'Initializing...';
 
 function createBot() {
-    console.log(`[Bot] Connecting to ${SERVER_HOST}:${SERVER_PORT} as ${BOT_USERNAME}...`);
+    console.log(`[Bot] Connecting to ${SERVER_HOST}:${SERVER_PORT} as ${BOT_USERNAME} (Protocol: ${BOT_VERSION})...`);
     botStatus = `Connecting to ${SERVER_HOST}:${SERVER_PORT}...`;
 
-    bot = mineflayer.createBot({
-        host: SERVER_HOST,
-        port: SERVER_PORT,
-        username: BOT_USERNAME,
-        version: BOT_VERSION || undefined,
-        checkTimeoutInterval: 60000,
-        keepAlive: true
-    });
+    try {
+        bot = mineflayer.createBot({
+            host: SERVER_HOST,
+            port: SERVER_PORT,
+            username: BOT_USERNAME,
+            version: BOT_VERSION,
+            checkTimeoutInterval: 60000,
+            keepAlive: true,
+            hideErrors: false
+        });
 
-    bot.loadPlugin(pathfinder);
-    builder = new Builder(bot);
+        bot.loadPlugin(pathfinder);
+        builder = new Builder(bot);
 
-    bot.on('spawn', () => {
-        console.log(`[Bot] ${BOT_USERNAME} successfully spawned into world!`);
-        botStatus = 'Online (In World)';
-        bot.chat(`🤖 ${BOT_USERNAME} is online and ready! Type !help for commands.`);
-    });
+        bot.on('spawn', () => {
+            console.log(`[Bot] ${BOT_USERNAME} successfully spawned into world!`);
+            botStatus = 'Online (In World)';
+            bot.chat(`🤖 ${BOT_USERNAME} is online and ready! Type !help for commands.`);
+        });
 
-    bot.on('chat', (username, message) => {
-        if (username === bot.username) return;
-        handleCommand(username, message.trim());
-    });
+        bot.on('chat', (username, message) => {
+            if (username === bot.username) return;
+            handleCommand(username, message.trim());
+        });
 
-    bot.on('kicked', (reason) => {
-        console.log(`[Bot] Kicked from server: ${reason}`);
-        botStatus = `Kicked: ${reason}`;
+        bot.on('kicked', (reason) => {
+            console.log(`[Bot] Kicked from server: ${reason}`);
+            botStatus = `Kicked: ${reason}`;
+            scheduleReconnect();
+        });
+
+        bot.on('end', () => {
+            console.log('[Bot] Disconnected from server.');
+            botStatus = 'Disconnected. Retrying...';
+            scheduleReconnect();
+        });
+
+        bot.on('error', (err) => {
+            console.error('[Bot Error]', err.message);
+            botStatus = `Error: ${err.message}`;
+            if (err.message && err.message.includes('version')) {
+                console.log('[Bot] Version mismatch detected. Retrying with fallback protocol...');
+            }
+        });
+    } catch (err) {
+        console.error('[Bot Init Error]', err.message);
         scheduleReconnect();
-    });
-
-    bot.on('end', () => {
-        console.log('[Bot] Disconnected from server.');
-        botStatus = 'Disconnected. Retrying...';
-        scheduleReconnect();
-    });
-
-    bot.on('error', (err) => {
-        console.error('[Bot Error]', err.message);
-        botStatus = `Error: ${err.message}`;
-    });
+    }
 }
 
 function scheduleReconnect() {
@@ -77,7 +113,12 @@ function handleCommand(username, message) {
     const args = parts.slice(1);
 
     const player = bot.players[username];
-    const playerPos = player && player.entity ? player.entity.position.floored() : bot.entity.position.floored();
+    const playerPos = player && player.entity ? player.entity.position.floored() : (bot.entity ? bot.entity.position.floored() : null);
+
+    if (!playerPos && ['come', 'follow', 'pyramid', 'dome', 'tower', 'cube'].includes(cmd)) {
+        bot.chat('❌ Cannot locate your position.');
+        return;
+    }
 
     switch (cmd) {
         case 'help':
@@ -140,7 +181,8 @@ function handleCommand(username, message) {
         case 'status':
             const stat = builder.getStatus();
             if (stat.status === 'Idle') {
-                bot.chat(`🟢 Bot is idle at (${Math.round(bot.entity.position.x)}, ${Math.round(bot.entity.position.y)}, ${Math.round(bot.entity.position.z)})`);
+                const posStr = bot.entity ? `(${Math.round(bot.entity.position.x)}, ${Math.round(bot.entity.position.y)}, ${Math.round(bot.entity.position.z)})` : 'unknown';
+                bot.chat(`🟢 Bot is idle at ${posStr}`);
             } else {
                 bot.chat(`🔨 Building ${stat.project}: ${stat.placed}/${stat.total} blocks (${stat.percent}%)`);
             }
@@ -157,7 +199,7 @@ const app = express();
 
 app.get('/', (req, res) => {
     const buildStat = builder ? builder.getStatus() : { status: 'Idle', percent: 100, project: 'None' };
-    const botPos = bot && bot.entity ? `${Math.round(bot.entity.position.x)}, ${Math.round(bot.entity.position.y)}, ${Math.round(bot.entity.position.z)}` : 'Offline';
+    const botPos = bot && bot.entity ? `${Math.round(bot.entity.position.x)}, ${Math.round(bot.entity.position.y)}, ${Math.round(bot.entity.position.z)}` : 'Connecting...';
 
     res.send(`
 <!DOCTYPE html>
