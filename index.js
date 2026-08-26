@@ -1,50 +1,45 @@
-// ── NATIVE MINECRAFT 26.2 (PROTOCOL 776) SNAPSHOT HOOK ──────────────────────
-const Module = require('module');
-const originalRequire = Module.prototype.require;
+// ── BULLETPROOF 26.2 PROTOCOL 776 PATCH ─────────────────────────────────────
+const mcDataModule = require('minecraft-data');
+const mcDataCacheKey = require.resolve('minecraft-data');
 
-let mcDataPatchApplied = false;
-Module.prototype.require = function(path) {
-    const exported = originalRequire.apply(this, arguments);
-    if ((path === 'minecraft-data' || path.endsWith('/minecraft-data')) && !mcDataPatchApplied) {
-        mcDataPatchApplied = true;
-        const origFunc = exported;
-        const patchedFunc = function(version) {
-            if (version === '26.2' || version === 776 || version === '776') {
-                const latest = origFunc.supportedVersions.pc[origFunc.supportedVersions.pc.length - 1];
-                const data = origFunc(latest);
-                return {
-                    ...data,
-                    version: {
-                        ...data.version,
-                        minecraftVersion: '26.2',
-                        version: 776,
-                        majorVersion: '26.2',
-                        dataVersion: 4903
-                    }
-                };
-            }
-            return origFunc(version);
-        };
-        Object.assign(patchedFunc, origFunc);
-        if (patchedFunc.versions && patchedFunc.versions.pc) {
-            const latest = patchedFunc.supportedVersions.pc[patchedFunc.supportedVersions.pc.length - 1];
-            const baseVer = patchedFunc.versions.pc[latest];
-            patchedFunc.versions.pc['26.2'] = {
-                ...baseVer,
+const latestVersion = mcDataModule.supportedVersions.pc[mcDataModule.supportedVersions.pc.length - 1] || '1.21.4';
+const latestData = mcDataModule(latestVersion);
+
+const patchedMcData = function (version) {
+    if (version === '26.2' || version === 776 || version === '776' || version === false || version === undefined) {
+        return {
+            ...latestData,
+            version: {
+                ...latestData.version,
                 minecraftVersion: '26.2',
                 version: 776,
                 majorVersion: '26.2',
                 dataVersion: 4903
-            };
-            if (!patchedFunc.supportedVersions.pc.includes('26.2')) {
-                patchedFunc.supportedVersions.pc.push('26.2');
             }
-        }
-        console.log('[Native 26.2 Hook] Injected Protocol 776 definitions for Minecraft 26.2.');
-        return patchedFunc;
+        };
     }
-    return exported;
+    try {
+        return mcDataModule(version) || latestData;
+    } catch (e) {
+        return latestData;
+    }
 };
+
+Object.assign(patchedMcData, mcDataModule);
+if (patchedMcData.versions && patchedMcData.versions.pc) {
+    patchedMcData.versions.pc['26.2'] = {
+        ...(patchedMcData.versions.pc[latestVersion] || latestData.version),
+        minecraftVersion: '26.2',
+        version: 776,
+        majorVersion: '26.2',
+        dataVersion: 4903
+    };
+    if (!patchedMcData.supportedVersions.pc.includes('26.2')) {
+        patchedMcData.supportedVersions.pc.push('26.2');
+    }
+}
+require.cache[mcDataCacheKey].exports = patchedMcData;
+console.log('[Native 26.2 Patch] Protocol 776 registered in require.cache.');
 
 const mineflayer = require('mineflayer');
 const { pathfinder, Movements, goals } = require('mineflayer-pathfinder');
@@ -56,7 +51,6 @@ const SERVER_HOST = process.env.SERVER_HOST || 'localhost';
 const SERVER_PORT = parseInt(process.env.SERVER_PORT || '25565');
 const BOT_USERNAME = process.env.BOT_NAME || 'BuilderBot';
 const WEB_PORT = process.env.PORT || 3000;
-const BOT_VERSION = '26.2'; // Native 26.2 Protocol 776
 
 let bot = null;
 let builder = null;
@@ -64,7 +58,7 @@ let reconnectTimer = null;
 let botStatus = 'Initializing...';
 
 function createBot() {
-    console.log(`[Bot] Connecting to ${SERVER_HOST}:${SERVER_PORT} as ${BOT_USERNAME} on Native Minecraft 26.2 (Protocol: 776)...`);
+    console.log(`[Bot] Connecting to ${SERVER_HOST}:${SERVER_PORT} as ${BOT_USERNAME} on 26.2 (Protocol: 776)...`);
     botStatus = `Connecting to ${SERVER_HOST}:${SERVER_PORT}...`;
 
     try {
@@ -72,7 +66,8 @@ function createBot() {
             host: SERVER_HOST,
             port: SERVER_PORT,
             username: BOT_USERNAME,
-            version: BOT_VERSION,
+            version: '26.2',
+            protocolVersion: 776,
             checkTimeoutInterval: 120000,
             keepAlive: true,
             hideErrors: true
@@ -91,7 +86,7 @@ function createBot() {
             }, 1500);
         });
 
-        // Signed Chat & Modern System Chat Handler
+        // Signed Chat Handler
         bot.on('messagestr', (message) => {
             const cleanMsg = message.trim();
             console.log(`[Chat] ${cleanMsg}`);
@@ -119,13 +114,13 @@ function createBot() {
 
         bot.on('kicked', (reason) => {
             const reasonStr = typeof reason === 'object' ? JSON.stringify(reason) : String(reason);
-            console.log(`[Bot] Disconnected/Kicked: ${reasonStr}`);
+            console.log(`[Bot] Kicked: ${reasonStr}`);
             botStatus = `Kicked: ${reasonStr}`;
             scheduleReconnect();
         });
 
         bot.on('end', () => {
-            console.log('[Bot] Connection ended.');
+            console.log('[Bot] Disconnected from server.');
             botStatus = 'Disconnected. Retrying...';
             scheduleReconnect();
         });
