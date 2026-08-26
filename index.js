@@ -32,9 +32,9 @@ const SERVER_PORT = parseInt(process.env.SERVER_PORT || '25565');
 const BOT_USERNAME = process.env.BOT_NAME || 'BuilderBot';
 const WEB_PORT = process.env.PORT || 3000;
 
-// Supported protocol versions to try in sequence
-const PROTOCOL_CANDIDATES = ['1.21.4', '1.21.1', '1.21', '1.20.4'];
-let candidateIndex = 0;
+const PROTOCOL_VERSION = process.env.BOT_VERSION && process.env.BOT_VERSION !== '26.2' && process.env.BOT_VERSION !== 'false'
+    ? process.env.BOT_VERSION
+    : '1.21.4';
 
 let bot = null;
 let builder = null;
@@ -42,42 +42,65 @@ let reconnectTimer = null;
 let botStatus = 'Initializing...';
 
 function createBot() {
-    const currentVersion = process.env.BOT_VERSION && process.env.BOT_VERSION !== '26.2' && process.env.BOT_VERSION !== 'false'
-        ? process.env.BOT_VERSION
-        : PROTOCOL_CANDIDATES[candidateIndex % PROTOCOL_CANDIDATES.length];
-
-    console.log(`[Bot] Connecting to ${SERVER_HOST}:${SERVER_PORT} as ${BOT_USERNAME} (Protocol: ${currentVersion})...`);
-    botStatus = `Connecting as ${BOT_USERNAME} (${currentVersion})...`;
+    console.log(`[Bot] Connecting to ${SERVER_HOST}:${SERVER_PORT} as ${BOT_USERNAME} (Protocol: ${PROTOCOL_VERSION})...`);
+    botStatus = `Connecting to ${SERVER_HOST}:${SERVER_PORT}...`;
 
     try {
         bot = mineflayer.createBot({
             host: SERVER_HOST,
             port: SERVER_PORT,
             username: BOT_USERNAME,
-            version: currentVersion,
-            checkTimeoutInterval: 60000,
+            version: PROTOCOL_VERSION,
+            checkTimeoutInterval: 120000,
             keepAlive: true,
-            hideErrors: false
+            hideErrors: true // Suppresses non-fatal custom sound / ad packet warnings
         });
 
         bot.loadPlugin(pathfinder);
         builder = new Builder(bot);
 
         bot.on('spawn', () => {
-            console.log(`[Bot] 🎉 ${BOT_USERNAME} successfully joined the world!`);
+            console.log(`[Bot] 🎉 ${BOT_USERNAME} is ONLINE in the world!`);
             botStatus = 'Online (In World)';
-            bot.chat(`🤖 ${BOT_USERNAME} is online and ready! Type !help for commands.`);
+            setTimeout(() => {
+                try {
+                    bot.chat(`🤖 ${BOT_USERNAME} online! Type !help for building commands.`);
+                } catch (e) {}
+            }, 1500);
         });
 
+        // 1. Modern Minecraft 1.20 - 1.21+ Signed Chat Handler
+        bot.on('messagestr', (message, position, jsonMsg) => {
+            const cleanMsg = message.trim();
+            console.log(`[Server Chat] ${cleanMsg}`);
+
+            // Look for commands like "!help", "!pyramid", etc.
+            if (cleanMsg.includes('!')) {
+                const cmdIndex = cleanMsg.indexOf('!');
+                const commandText = cleanMsg.substring(cmdIndex);
+                
+                // Extract author if available
+                let author = '';
+                if (cleanMsg.includes('<') && cleanMsg.includes('>')) {
+                    author = cleanMsg.substring(cleanMsg.indexOf('<') + 1, cleanMsg.indexOf('>')).trim();
+                } else if (cleanMsg.includes(':')) {
+                    author = cleanMsg.substring(0, cleanMsg.indexOf(':')).trim();
+                }
+
+                handleCommand(author, commandText);
+            }
+        });
+
+        // 2. Legacy Chat Handler (Fallback)
         bot.on('chat', (username, message) => {
             if (username === bot.username) return;
             handleCommand(username, message.trim());
         });
 
         bot.on('kicked', (reason) => {
-            console.log(`[Bot] Kicked from server: ${reason}`);
-            botStatus = `Kicked: ${reason}`;
-            candidateIndex++;
+            const reasonStr = typeof reason === 'object' ? JSON.stringify(reason) : String(reason);
+            console.log(`[Bot] Kicked from server: ${reasonStr}`);
+            botStatus = `Kicked: ${reasonStr}`;
             scheduleReconnect();
         });
 
@@ -88,13 +111,12 @@ function createBot() {
         });
 
         bot.on('error', (err) => {
-            console.error('[Bot Error]', err.message);
-            botStatus = `Error: ${err.message}`;
-            candidateIndex++;
+            console.log('[Bot Warning]', err.message);
+            // Non-fatal error; keep session alive if possible
         });
+
     } catch (err) {
         console.error('[Bot Init Error]', err.message);
-        candidateIndex++;
         scheduleReconnect();
     }
 }
@@ -115,13 +137,10 @@ function handleCommand(username, message) {
     const cmd = parts[0].toLowerCase();
     const args = parts.slice(1);
 
-    const player = bot.players[username];
-    const playerPos = player && player.entity ? player.entity.position.floored() : (bot.entity ? bot.entity.position.floored() : null);
+    console.log(`[Command Triggered] !${cmd} with args:`, args);
 
-    if (!playerPos && ['come', 'follow', 'pyramid', 'dome', 'tower', 'cube'].includes(cmd)) {
-        bot.chat('❌ Cannot locate your position in world.');
-        return;
-    }
+    const player = username ? bot.players[username] : null;
+    const playerPos = player && player.entity ? player.entity.position.floored() : (bot.entity ? bot.entity.position.floored() : null);
 
     switch (cmd) {
         case 'help':
@@ -130,50 +149,54 @@ function handleCommand(username, message) {
 
         case 'come':
             if (!player || !player.entity) {
-                bot.chat('❌ Cannot see you.');
+                bot.chat('❌ I cannot see you. Stand closer to me.');
                 return;
             }
-            bot.chat(`🏃 Coming to ${username}...`);
+            bot.chat(`🏃 Coming to you...`);
             bot.pathfinder.setGoal(new goals.GoalNear(playerPos.x, playerPos.y, playerPos.z, 2));
             break;
 
         case 'follow':
             if (!player || !player.entity) {
-                bot.chat('❌ Cannot see you.');
+                bot.chat('❌ I cannot see you. Stand closer to me.');
                 return;
             }
-            bot.chat(`🚶 Following ${username}...`);
+            bot.chat(`🚶 Following you...`);
             bot.pathfinder.setGoal(new goals.GoalFollow(player.entity, 2), true);
             break;
 
         case 'stop':
             bot.pathfinder.stop();
             if (builder) builder.stop();
-            bot.chat('⏹ Tasks stopped.');
+            bot.chat('⏹ All tasks stopped.');
             break;
 
         case 'pyramid':
             const pSize = parseInt(args[0]) || 16;
-            const pTasks = builder.createPyramid(playerPos.offset(2, 0, 2), pSize);
+            const pOrigin = playerPos || bot.entity.position.floored();
+            const pTasks = builder.createPyramid(pOrigin.offset(2, 0, 2), pSize);
             builder.startBuild(`Pyramid (${pSize}x${pSize})`, pTasks);
             break;
 
         case 'dome':
             const dRadius = parseInt(args[0]) || 8;
-            const dTasks = builder.createDome(playerPos.offset(dRadius + 2, 0, 0), dRadius);
+            const dOrigin = playerPos || bot.entity.position.floored();
+            const dTasks = builder.createDome(dOrigin.offset(dRadius + 2, 0, 0), dRadius);
             builder.startBuild(`Glass Dome (r=${dRadius})`, dTasks);
             break;
 
         case 'tower':
             const tRadius = parseInt(args[0]) || 4;
             const tHeight = parseInt(args[1]) || 20;
-            const tTasks = builder.createTower(playerPos.offset(tRadius + 2, 0, 0), tRadius, tHeight);
+            const tOrigin = playerPos || bot.entity.position.floored();
+            const tTasks = builder.createTower(tOrigin.offset(tRadius + 2, 0, 0), tRadius, tHeight);
             builder.startBuild(`Castle Tower (r=${tRadius}, h=${tHeight})`, tTasks);
             break;
 
         case 'cube':
             const cSize = parseInt(args[0]) || 4;
-            const cTasks = builder.createCube(playerPos.offset(2, 0, 2), cSize);
+            const cOrigin = playerPos || bot.entity.position.floored();
+            const cTasks = builder.createCube(cOrigin.offset(2, 0, 2), cSize);
             builder.startBuild(`Cube (${cSize}x${cSize})`, cTasks);
             break;
 
