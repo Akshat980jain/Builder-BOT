@@ -13,6 +13,7 @@ java -Xms256M -Xmx512M -jar /app/viaproxy/viaproxy.jar cli \
   --target-address "${MC_HOST}:${MC_PORT}" \
   --target-version "${MC_VERSION}" \
   --auth-method "${VIAPROXY_AUTH_METHOD:-NONE}" \
+  --ignore-protocol-translation-errors true \
   > /app/viaproxy.log 2>&1 &
 
 VIAPROXY_PID=$!
