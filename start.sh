@@ -8,7 +8,7 @@ MC_VERSION="${MC_VERSION:-26.2}"
 
 echo "[start.sh] Launching ViaProxy: 127.0.0.1:${VIAPROXY_PORT} -> ${MC_HOST}:${MC_PORT} (target-version ${MC_VERSION})"
 
-java -jar /app/viaproxy/viaproxy.jar cli \
+java -Xms256M -Xmx512M -jar /app/viaproxy/viaproxy.jar cli \
   --bind-address "127.0.0.1:${VIAPROXY_PORT}" \
   --target-address "${MC_HOST}:${MC_PORT}" \
   --target-version "${MC_VERSION}" \
