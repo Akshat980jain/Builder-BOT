@@ -10,10 +10,6 @@ const { Builder } = require('./src/builder');
 // ---------------------------------------------------------------------------
 // Config & ViaProxy Bridge
 // ---------------------------------------------------------------------------
-// The bot connects to a local ViaProxy instance (started by start.sh in Docker)
-// speaking standard 1.21.4 protocol, and ViaProxy translates all packets to 
-// 26.2 (Protocol 776) on the wire to your real Aternos server.
-
 const REAL_SERVER_HOST = process.env.MC_HOST || process.env.SERVER_HOST || 'localhost';
 const REAL_SERVER_PORT = process.env.MC_PORT || process.env.SERVER_PORT || '25565';
 const REAL_SERVER_VERSION = process.env.MC_VERSION || '26.2';
@@ -100,6 +96,15 @@ let bot = null;
 let builder = null;
 let reconnectTimer = null;
 
+function safeChat(msg) {
+  if (!bot) return;
+  try {
+    bot.chat(msg);
+  } catch (e) {
+    console.warn('[Bot Chat Notice]', e.message);
+  }
+}
+
 function createBot() {
   console.log(
     `[Bot] Connecting to ViaProxy at ${VIAPROXY_HOST}:${VIAPROXY_PORT} ` +
@@ -129,9 +134,7 @@ function createBot() {
     bot.pathfinder.setMovements(defaultMove);
 
     setTimeout(() => {
-      try {
-        bot.chat(`🤖 ${BOT_USERNAME} online in 26.2! Commands: !pyramid <size>, !dome <r>, !tower <r> <h>, !come, !undo, !stop`);
-      } catch (e) {}
+      safeChat(`🤖 ${BOT_USERNAME} online in 26.2! Commands: !pyramid <size>, !dome <r>, !tower <r> <h>, !come, !undo, !stop`);
     }, 1500);
   });
 
@@ -229,7 +232,7 @@ function handleCommandArgs(username, text) {
 
 async function runBuild(requester, offsets) {
   if (builder.isBuilding()) {
-    bot.chat(`Already building — send !stop first, ${requester}.`);
+    safeChat(`Already building — send !stop first, ${requester}.`);
     return;
   }
 
@@ -237,45 +240,45 @@ async function runBuild(requester, offsets) {
   const origin = player ? player.position.floored() : bot.entity.position.floored();
 
   builder.enqueue(offsets, origin);
-  bot.chat(`🏗 Building ${offsets.length} blocks near ${requester}...`);
+  safeChat(`🏗 Building ${offsets.length} blocks near ${requester}...`);
 
   try {
     const result = await builder.run((placed, total, done) => {
       if (done) {
-        bot.chat(`🎉 Build ${result?.cancelled ? 'cancelled' : 'complete'}: ${placed}/${total} placed.`);
+        safeChat(`🎉 Build ${result?.cancelled ? 'cancelled' : 'complete'}: ${placed}/${total} placed.`);
       }
     });
     if (!result.cancelled) {
-      bot.chat(`Done. Placed ${result.placed}/${result.total} blocks.`);
+      safeChat(`Done. Placed ${result.placed}/${result.total} blocks.`);
     }
   } catch (err) {
-    bot.chat(`Build failed: ${err.message}`);
+    safeChat(`Build failed: ${err.message}`);
   }
 }
 
 async function runUndo(requester) {
   if (builder.isBuilding()) {
-    bot.chat(`Can't undo mid-build — send !stop first, ${requester}.`);
+    safeChat(`Can't undo mid-build — send !stop first, ${requester}.`);
     return;
   }
-  bot.chat('⏪ Undoing last build...');
+  safeChat('⏪ Undoing last build...');
   const result = await builder.undo();
-  bot.chat(`✔ Undo complete: removed ${result.undone}/${result.total} blocks.`);
+  safeChat(`✔ Undo complete: removed ${result.undone}/${result.total} blocks.`);
 }
 
 function stopBuild(requester) {
   if (!builder.isBuilding()) {
-    bot.chat(`Nothing in progress, ${requester}.`);
+    safeChat(`Nothing in progress, ${requester}.`);
     return;
   }
   builder.cancel();
-  bot.chat('⏹ Stopping after current block...');
+  safeChat('⏹ Stopping after current block...');
 }
 
 async function comeToPlayer(requester) {
   const player = bot.players[requester]?.entity;
   if (!player) {
-    bot.chat(`Can't see you, ${requester}. Stand closer.`);
+    safeChat(`Can't see you, ${requester}. Stand closer.`);
     return;
   }
   const pos = player.position;
