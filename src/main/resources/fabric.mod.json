@@ -22,7 +22,9 @@
       "com.example.builderbot.client.BuilderBotClient"
     ]
   },
-  "mixins": [],
+  "mixins": [
+    "builderbot.mixins.json"
+  ],
   "depends": {
     "fabricloader": ">=0.19.3",
     "minecraft": "*",
