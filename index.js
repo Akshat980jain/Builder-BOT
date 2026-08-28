@@ -291,7 +291,7 @@ function createBot() {
     }
 
     setTimeout(() => {
-      safeChat(`🤖 ${BOT_USERNAME} online in 26.2! Commands: !pyramid <size>, !dome <r>, !tower <r> <h>, !come, !undo, !stop`);
+      safeChat(`[BuilderBot] ${BOT_USERNAME} online in 26.2! Commands: !pyramid <size>, !dome <r>, !tower <r> <h>, !come, !undo, !stop`);
     }, 2000);
   });
 
@@ -417,13 +417,13 @@ async function runBuild(requester, offsets) {
   const origin = player ? player.position.floored() : bot.entity.position.floored();
 
   builder.enqueue(offsets, origin);
-  safeChat(`🏗 Building ${offsets.length} blocks near ${requester}...`);
+  safeChat(`[Builder] Building ${offsets.length} blocks near ${requester}...`);
   logSystem(`[Builder] Started construction of ${offsets.length} blocks requested by ${requester}`);
 
   try {
     const result = await builder.run((placed, total, done) => {
       if (done) {
-        safeChat(`🎉 Build ${result?.cancelled ? 'cancelled' : 'complete'}: ${placed}/${total} placed.`);
+        safeChat(`[Builder] Build ${result?.cancelled ? 'cancelled' : 'complete'}: ${placed}/${total} placed.`);
       }
     });
     if (!result.cancelled) {
@@ -441,9 +441,9 @@ async function runUndo(requester) {
     safeChat(`Can't undo mid-build — send !stop first, ${requester}.`);
     return;
   }
-  safeChat('⏪ Undoing last build...');
+  safeChat('[Undo] Undoing last build...');
   const result = await builder.undo();
-  safeChat(`✔ Undo complete: removed ${result.undone}/${result.total} blocks.`);
+  safeChat(`[OK] Undo complete: removed ${result.undone}/${result.total} blocks.`);
   logSystem(`[Builder Undo] Undone ${result.undone}/${result.total} blocks.`);
 }
 
@@ -453,7 +453,7 @@ function stopBuild(requester) {
     return;
   }
   builder.cancel();
-  safeChat('⏹ Stopping after current block...');
+  safeChat('[Stop] Stopping after current block...');
   logSystem(`[Builder] Build cancelled by ${requester}`);
 }
 
