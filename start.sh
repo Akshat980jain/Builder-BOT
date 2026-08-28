@@ -34,5 +34,8 @@ s.on('error', () => process.exit(1));
   sleep 1
 done
 
+echo "[start.sh] Running patch-mineflayer.js..."
+node patch-mineflayer.js || true
+
 echo "[start.sh] ViaProxy is up (pid ${VIAPROXY_PID}). Starting the bot..."
 exec node index.js

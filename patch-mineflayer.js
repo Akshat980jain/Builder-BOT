@@ -1,5 +1,4 @@
-// patch-mineflayer.js — Pure JSON Data Registration for Minecraft 26.2
-// Does NOT modify ANY JavaScript code — 100% immune to syntax/type errors.
+// patch-mineflayer.js — JSON Data & Protocol Fixes for 1.21+ & 26.2
 
 const fs = require('fs');
 const path = require('path');
@@ -15,7 +14,6 @@ if (fs.existsSync(dataPathsFile)) {
             const pcKeys = Object.keys(dataPaths.pc);
             const latestKey = pcKeys[pcKeys.length - 1];
             if (latestKey) {
-                // Clone latest version definitions for 26.2
                 dataPaths.pc['26.2'] = Object.assign({}, dataPaths.pc[latestKey]);
                 fs.writeFileSync(dataPathsFile, JSON.stringify(dataPaths, null, 2), 'utf8');
                 console.log(`[JSON Patch] dataPaths.json: 26.2 registered (cloned from ${latestKey})`);
@@ -74,4 +72,20 @@ if (fs.existsSync(versionsFile)) {
     }
 }
 
-console.log('[JSON Patch] ✅ All JSON datasets successfully updated for 26.2 (Protocol 776).');
+// ── 4. Patch processNbtMessage in minecraft-protocol/src/client/chat.js ──────
+const chatJsPath = path.join(__dirname, 'node_modules', 'minecraft-protocol', 'src', 'client', 'chat.js');
+if (fs.existsSync(chatJsPath)) {
+    try {
+        let content = fs.readFileSync(chatJsPath, 'utf8');
+        content = content.replace(
+            /processNbtMessage\(msg\)/g,
+            "(function(m){ try { const pnbt = require('prismarine-nbt'); return pnbt.simplify(m); } catch (e) { return m; } })(msg)"
+        );
+        fs.writeFileSync(chatJsPath, content, 'utf8');
+        console.log('[Patch] minecraft-protocol chat.js successfully patched for processNbtMessage.');
+    } catch (e) {
+        console.error('[Patch Error] chat.js:', e.message);
+    }
+}
+
+console.log('[JSON Patch] ✅ All datasets & protocol handlers updated.');

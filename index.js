@@ -3,8 +3,23 @@
 // ---------------------------------------------------------------------------
 // Protocol & Chat Compatibility Patches for 1.21+ / ViaProxy structured chat
 // ---------------------------------------------------------------------------
-const Module = require('module');
-const originalRequire = Module.prototype.require;
+const fs = require('fs');
+const path = require('path');
+
+// Auto-patch minecraft-protocol chat.js if present on disk
+try {
+  const chatJsPath = path.join(__dirname, 'node_modules', 'minecraft-protocol', 'src', 'client', 'chat.js');
+  if (fs.existsSync(chatJsPath)) {
+    let content = fs.readFileSync(chatJsPath, 'utf8');
+    if (content.includes('processNbtMessage(msg)')) {
+      content = content.replace(
+        /processNbtMessage\(msg\)/g,
+        "(function(m){ try { const pnbt = require('prismarine-nbt'); return pnbt.simplify(m); } catch (e) { return m; } })(msg)"
+      );
+      fs.writeFileSync(chatJsPath, content, 'utf8');
+    }
+  }
+} catch (e) {}
 
 // Global NBT Message processor fallback
 try {
@@ -413,6 +428,9 @@ function scheduleReconnect(reason) {
 
   // Fast reconnect 8-15s, exponential backoff if throttled
   let delay = 10000;
+  if (String(reason).includes('duplicate_login') || botStatus.includes('duplicate_login')) {
+    delay = 15000;
+  }
   if (reconnectAttempts > 3) delay = 20000;
   if (reconnectAttempts > 6) delay = 35000;
 
