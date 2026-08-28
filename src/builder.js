@@ -80,9 +80,16 @@ class Builder {
     // Walk within reach of the reference block.
     await bot.pathfinder.goto(new goals.GoalNear(refPos.x, refPos.y, refPos.z, 3));
 
-    const item = bot.inventory.items().find((i) => i.name === this.blockName);
+    let item = bot.inventory.items().find((i) => i.name === this.blockName);
     if (!item) {
-      throw new Error(`Out of ${this.blockName} — restock the bot's inventory.`);
+      item = bot.inventory.items().find((i) =>
+        i.name.includes('sandstone') || i.name.includes('cobble') || i.name.includes('stone') ||
+        i.name.includes('dirt') || i.name.includes('plank') || i.name.includes('brick') ||
+        i.name.includes('concrete') || i.name.includes('terracotta')
+      );
+    }
+    if (!item) {
+      throw new Error(`Out of building blocks (tried ${this.blockName}) — please toss some blocks to the bot.`);
     }
     await bot.equip(item, 'hand');
 

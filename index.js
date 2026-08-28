@@ -511,8 +511,13 @@ async function runBuild(requester, offsets) {
     return;
   }
 
-  const player = bot.players[requester]?.entity;
-  const origin = player ? player.position.floored() : bot.entity.position.floored();
+  let targetEntity = bot.players[requester]?.entity;
+  if (!targetEntity) {
+    const found = Object.values(bot.entities).find(e => e.type === 'player' && e.username && e.username.toLowerCase() === requester.toLowerCase());
+    if (found) targetEntity = found;
+  }
+
+  const origin = targetEntity ? targetEntity.position.floored() : (bot.entity ? bot.entity.position.floored() : new Vec3(0, 64, 0));
 
   builder.enqueue(offsets, origin);
   safeChat(`[Builder] Building ${offsets.length} blocks near ${requester}...`);
@@ -521,15 +526,17 @@ async function runBuild(requester, offsets) {
   try {
     const result = await builder.run((placed, total, done) => {
       if (done) {
-        safeChat(`[Builder] Build ${result?.cancelled ? 'cancelled' : 'complete'}: ${placed}/${total} placed.`);
+        logSystem(`[Builder] Completed: ${placed}/${total} placed.`);
       }
     });
-    if (!result.cancelled) {
-      safeChat(`Done. Placed ${result.placed}/${result.total} blocks.`);
+    if (result && !result.cancelled) {
+      safeChat(`[Builder] Done. Placed ${result.placed}/${result.total} blocks.`);
       logSystem(`[Builder] Finished build: ${result.placed}/${result.total} placed.`);
+    } else if (result && result.cancelled) {
+      safeChat(`[Builder] Build stopped: ${result.placed}/${result.total} placed.`);
     }
   } catch (err) {
-    safeChat(`Build failed: ${err.message}`);
+    safeChat(`[Builder Error] Build failed: ${err.message}`);
     logSystem(`[Builder Error] ${err.message}`);
   }
 }
@@ -540,9 +547,13 @@ async function runUndo(requester) {
     return;
   }
   safeChat('[Undo] Undoing last build...');
-  const result = await builder.undo();
-  safeChat(`[OK] Undo complete: removed ${result.undone}/${result.total} blocks.`);
-  logSystem(`[Builder Undo] Undone ${result.undone}/${result.total} blocks.`);
+  try {
+    const result = await builder.undo();
+    safeChat(`[OK] Undo complete: removed ${result.undone}/${result.total} blocks.`);
+    logSystem(`[Builder Undo] Undone ${result.undone}/${result.total} blocks.`);
+  } catch (err) {
+    safeChat(`[Undo Error] ${err.message}`);
+  }
 }
 
 function stopBuild(requester) {
@@ -556,13 +567,17 @@ function stopBuild(requester) {
 }
 
 async function comeToPlayer(requester) {
-  const player = bot.players[requester]?.entity;
+  let player = bot.players[requester]?.entity;
+  if (!player) {
+    player = Object.values(bot.entities).find(e => e.type === 'player' && e.username && e.username.toLowerCase() === requester.toLowerCase());
+  }
   if (!player) {
     safeChat(`Can't see you, ${requester}. Stand closer.`);
     return;
   }
   const pos = player.position;
   bot.pathfinder.setGoal(new goals.GoalNear(pos.x, pos.y, pos.z, 2));
+  safeChat(`[Movement] Coming to you, ${requester}!`);
   logSystem(`[Movement] Pathfinding to player ${requester} at (${Math.round(pos.x)}, ${Math.round(pos.y)}, ${Math.round(pos.z)})`);
 }
 
