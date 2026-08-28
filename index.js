@@ -1,5 +1,51 @@
 'use strict';
 
+// ---------------------------------------------------------------------------
+// Prismarine-Chat Compatibility Patch for 1.21+ / ViaProxy structured chat
+// ---------------------------------------------------------------------------
+const Module = require('module');
+const originalRequire = Module.prototype.require;
+
+Module.prototype.require = function (id) {
+  const exports = originalRequire.apply(this, arguments);
+  if (id === 'prismarine-chat' || id.endsWith('/prismarine-chat') || id.endsWith('\\prismarine-chat')) {
+    if (typeof exports === 'function') {
+      const originalFactory = exports;
+      return function (registry) {
+        const ChatMessage = originalFactory(registry);
+        if (ChatMessage && typeof ChatMessage.fromNetwork === 'function') {
+          const originalFromNetwork = ChatMessage.fromNetwork;
+          ChatMessage.fromNetwork = function (type, message, ...args) {
+            try {
+              if (typeof type === 'object' && type !== null) {
+                type = type.type ?? type.id ?? type.name ?? 0;
+              }
+              return originalFromNetwork.call(this, type, message, ...args);
+            } catch (err) {
+              try {
+                const text = (typeof message === 'object' ? (message.text || JSON.stringify(message)) : String(message || ''));
+                return new ChatMessage(text);
+              } catch (e) {
+                return new ChatMessage('');
+              }
+            }
+          };
+        }
+        return ChatMessage;
+      };
+    }
+  }
+  return exports;
+};
+
+process.on('uncaughtException', (err) => {
+  if (err && err.message && err.message.includes('unknown chat format code')) {
+    console.warn(`[Chat Patch] Handled unknown chat format code smoothly: ${err.message}`);
+    return;
+  }
+  console.error('[Uncaught Exception]', err);
+});
+
 const express = require('express');
 const mineflayer = require('mineflayer');
 const { pathfinder, Movements, goals } = require('mineflayer-pathfinder');
