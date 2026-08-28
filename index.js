@@ -29,6 +29,9 @@ try {
   global.processNbtMessage = (msg) => msg;
 }
 
+const Module = require('module');
+const originalRequire = Module.prototype.require;
+
 Module.prototype.require = function (id) {
   const exports = originalRequire.apply(this, arguments);
 
