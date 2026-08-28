@@ -1,13 +1,23 @@
 'use strict';
 
 // ---------------------------------------------------------------------------
-// Prismarine-Chat Compatibility Patch for 1.21+ / ViaProxy structured chat
+// Protocol & Chat Compatibility Patches for 1.21+ / ViaProxy structured chat
 // ---------------------------------------------------------------------------
 const Module = require('module');
 const originalRequire = Module.prototype.require;
 
+// Global NBT Message processor fallback
+try {
+  const pnbt = require('prismarine-nbt');
+  global.processNbtMessage = (msg) => (msg ? pnbt.simplify(msg) : msg);
+} catch (e) {
+  global.processNbtMessage = (msg) => msg;
+}
+
 Module.prototype.require = function (id) {
   const exports = originalRequire.apply(this, arguments);
+
+  // Patch prismarine-chat format codes
   if (id === 'prismarine-chat' || id.endsWith('/prismarine-chat') || id.endsWith('\\prismarine-chat')) {
     if (typeof exports === 'function') {
       const originalFactory = exports;
@@ -35,13 +45,22 @@ Module.prototype.require = function (id) {
       };
     }
   }
+
   return exports;
 };
 
+// Prevent protocol / chat parsing hiccups from terminating the process
 process.on('uncaughtException', (err) => {
-  if (err && err.message && err.message.includes('unknown chat format code')) {
-    console.warn(`[Chat Patch] Handled unknown chat format code smoothly: ${err.message}`);
-    return;
+  if (err && err.message) {
+    if (
+      err.message.includes('unknown chat format code') ||
+      err.message.includes('processNbtMessage') ||
+      err.message.includes('write EPIPE') ||
+      err.message.includes('ECONNRESET')
+    ) {
+      console.warn(`[Protocol Patch] Handled non-fatal network/chat exception: ${err.message}`);
+      return;
+    }
   }
   console.error('[Uncaught Exception]', err);
 });
