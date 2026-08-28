@@ -6,7 +6,7 @@
 const fs = require('fs');
 const path = require('path');
 
-// Auto-patch minecraft-protocol chat.js if present on disk
+// Auto-patch minecraft-protocol chat.js and mineflayer chat.js if present on disk
 try {
   const chatJsPath = path.join(__dirname, 'node_modules', 'minecraft-protocol', 'src', 'client', 'chat.js');
   if (fs.existsSync(chatJsPath)) {
@@ -17,6 +17,18 @@ try {
         "(function(m){ try { const pnbt = require('prismarine-nbt'); return pnbt.simplify(m); } catch (e) { return m; } })(msg)"
       );
       fs.writeFileSync(chatJsPath, content, 'utf8');
+    }
+  }
+
+  const mfChatPath = path.join(__dirname, 'node_modules', 'mineflayer', 'lib', 'plugins', 'chat.js');
+  if (fs.existsSync(mfChatPath)) {
+    let content = fs.readFileSync(mfChatPath, 'utf8');
+    if (!content.includes('typeof msg === "object"')) {
+      content = content.replace(
+        /JSON\.parse\(([^)]+)\)/g,
+        '(typeof $1 === "object" ? $1 : (function(x){ try { return JSON.parse(x); } catch(e){ return { text: String(x || "") }; } })($1))'
+      );
+      fs.writeFileSync(mfChatPath, content, 'utf8');
     }
   }
 } catch (e) {}

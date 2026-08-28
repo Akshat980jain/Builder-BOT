@@ -88,4 +88,20 @@ if (fs.existsSync(chatJsPath)) {
     }
 }
 
+// ── 5. Patch JSON.parse in mineflayer/lib/plugins/chat.js ───────────────────
+const mineflayerChatPath = path.join(__dirname, 'node_modules', 'mineflayer', 'lib', 'plugins', 'chat.js');
+if (fs.existsSync(mineflayerChatPath)) {
+    try {
+        let content = fs.readFileSync(mineflayerChatPath, 'utf8');
+        content = content.replace(
+            /JSON\.parse\(([^)]+)\)/g,
+            '(typeof $1 === "object" ? $1 : (function(x){ try { return JSON.parse(x); } catch(e){ return { text: String(x || "") }; } })($1))'
+        );
+        fs.writeFileSync(mineflayerChatPath, content, 'utf8');
+        console.log('[Patch] mineflayer chat.js successfully patched for Object messages.');
+    } catch (e) {
+        console.error('[Patch Error] mineflayer chat.js:', e.message);
+    }
+}
+
 console.log('[JSON Patch] ✅ All datasets & protocol handlers updated.');
