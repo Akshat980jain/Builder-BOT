@@ -526,8 +526,24 @@ function handleCommandArgs(username, text) {
       return runBuild(username, tower(parseInt(args[0], 10) || 3, parseInt(args[1], 10) || 12));
     case 'schematic':
       const schemName = args.join(' ');
-      safeChat(`[Builder] Schematic received: ${schemName}`);
-      return runBuild(username, pyramid(8));
+      safeChat(`[Builder] Loading schematic "${schemName}"...`);
+      try {
+        const { loadSchematic } = require('./src/schematic');
+        loadSchematic(schemName).then(offsets => {
+          if (offsets && offsets.length > 0) {
+            safeChat(`[Builder] Loaded ${offsets.length} blocks from "${schemName}"!`);
+            runBuild(username, offsets);
+          } else {
+            safeChat(`[Builder Error] Schematic contains 0 non-air blocks.`);
+          }
+        }).catch(err => {
+          safeChat(`[Builder Error] ${err.message}`);
+          logSystem(`[Schematic Error] ${err.message}`);
+        });
+      } catch (e) {
+        safeChat(`[Builder Error] ${e.message}`);
+      }
+      return;
     case 'help':
       safeChat(`[BuilderBot Commands] !pyramid <size>, !dome <r>, !tower <r> <h>, !stairs, !come, !undo, !stop`);
       return;
