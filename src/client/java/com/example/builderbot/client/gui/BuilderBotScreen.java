@@ -478,7 +478,6 @@ public class BuilderBotScreen extends Screen {
     private void onPreviewSchematic() {
         if (com.example.builderbot.client.render.ClientGhostRenderer.hasActiveGhost()) {
             com.example.builderbot.client.render.ClientGhostRenderer.clearGhostSchematic();
-            runCommand("builderbot preview clear");
             this.init();
             return;
         }
@@ -489,7 +488,6 @@ public class BuilderBotScreen extends Screen {
                 BlockPos origin = BlockPos.containing(Minecraft.getInstance().player.position());
                 com.example.builderbot.client.render.ClientGhostRenderer.showGhostSchematic(
                         selected.getName(), origin, selectedRotation);
-                runCommand("builderbot preview schematic " + selected.getName());
             }
             this.onClose();
         }
@@ -511,31 +509,38 @@ public class BuilderBotScreen extends Screen {
     private void runCommand(String command) {
         if (Minecraft.getInstance().player != null && Minecraft.getInstance().player.connection != null) {
             var conn = Minecraft.getInstance().player.connection;
-            // Send slash command to server
-            conn.sendCommand(command);
+            boolean isIntegratedServer = Minecraft.getInstance().hasSingleplayerServer();
 
-            // Also forward equivalent chat command for vanilla/cloud BuilderBot
-            if (command.startsWith("builderbot generate pyramid ")) {
-                String size = command.substring("builderbot generate pyramid ".length()).trim();
-                conn.sendChat("!pyramid " + size);
-            } else if (command.startsWith("builderbot generate dome ")) {
-                String r = command.substring("builderbot generate dome ".length()).trim();
-                conn.sendChat("!dome " + r);
-            } else if (command.startsWith("builderbot generate tower ")) {
-                String args = command.substring("builderbot generate tower ".length()).trim();
-                conn.sendChat("!tower " + args);
-            } else if (command.startsWith("builderbot generate stairs ")) {
-                String args = command.substring("builderbot generate stairs ".length()).trim();
-                conn.sendChat("!stairs " + args);
-            } else if (command.equals("builderbot undo") || command.contains("undo")) {
-                conn.sendChat("!undo");
-            } else if (command.equals("builderbot stop") || command.equals("builderbot stopall")) {
-                conn.sendChat("!stop");
-            } else if (command.equals("builderbot tp")) {
-                conn.sendChat("!come");
-            } else if (command.contains("schematic ")) {
-                String name = command.substring(command.indexOf("schematic ") + "schematic ".length()).trim();
-                conn.sendChat("!schematic " + name);
+            if (isIntegratedServer) {
+                // In singleplayer, the mod is installed on the internal server
+                conn.sendCommand(command);
+            } else {
+                // On a multiplayer server (Aternos/Vanilla), do NOT send unregistered /builderbot commands
+                // Translate directly into in-game bot chat commands so no red errors appear!
+                if (command.startsWith("builderbot generate pyramid ")) {
+                    String size = command.substring("builderbot generate pyramid ".length()).trim();
+                    conn.sendChat("!pyramid " + size);
+                } else if (command.startsWith("builderbot generate dome ")) {
+                    String r = command.substring("builderbot generate dome ".length()).trim();
+                    conn.sendChat("!dome " + r);
+                } else if (command.startsWith("builderbot generate tower ")) {
+                    String args = command.substring("builderbot generate tower ".length()).trim();
+                    conn.sendChat("!tower " + args);
+                } else if (command.startsWith("builderbot generate stairs ")) {
+                    String args = command.substring("builderbot generate stairs ".length()).trim();
+                    conn.sendChat("!stairs " + args);
+                } else if (command.equals("builderbot undo") || command.contains("undo")) {
+                    conn.sendChat("!undo");
+                } else if (command.equals("builderbot stop") || command.equals("builderbot stopall")) {
+                    conn.sendChat("!stop");
+                } else if (command.equals("builderbot tp")) {
+                    conn.sendChat("!come");
+                } else if (command.contains("schematic ")) {
+                    String name = command.substring(command.indexOf("schematic ") + "schematic ".length()).trim();
+                    conn.sendChat("!schematic " + name);
+                } else if (command.equals("builderbot fly")) {
+                    conn.sendChat("!status");
+                }
             }
         }
     }

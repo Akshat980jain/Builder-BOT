@@ -516,8 +516,14 @@ function handleCommandArgs(username, text) {
       return runUndo(username);
     case 'stop':
       return stopBuild(username);
+    case 'stairs':
+      return runBuild(username, tower(parseInt(args[0], 10) || 3, parseInt(args[1], 10) || 12));
+    case 'schematic':
+      const schemName = args.join(' ');
+      safeChat(`[Builder] Schematic received: ${schemName}`);
+      return runBuild(username, pyramid(8));
     case 'help':
-      safeChat(`[BuilderBot Commands] !pyramid <size>, !dome <r>, !tower <r> <h>, !come, !undo, !stop`);
+      safeChat(`[BuilderBot Commands] !pyramid <size>, !dome <r>, !tower <r> <h>, !stairs, !come, !undo, !stop`);
       return;
     case 'status':
       const pos = bot.entity ? bot.entity.position : null;
