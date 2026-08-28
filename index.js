@@ -408,6 +408,13 @@ function createBot() {
     handleCommandArgs(username, message);
   });
 
+  bot.on('whisper', (username, message) => {
+    if (username === bot.username) return;
+    logSystem(`[Whisper from ${username}] ${message}`);
+    const cmdText = message.trim().startsWith('!') ? message.trim() : '!' + message.trim();
+    handleCommandArgs(username, cmdText);
+  });
+
   bot.on('builder_place_error', (pos, err) => {
     logSystem(`[Builder Error] Failed at ${pos}: ${err.message}`);
   });
@@ -471,6 +478,15 @@ function handleChatCommand(message) {
     if (username !== bot.username) {
       handleCommandArgs(username, text);
     }
+    return;
+  }
+
+  // Handle whisper formats: "Player whispers to you: command" or "[Player -> you] command"
+  const whisperMatch = clean.match(/^([a-zA-Z0-9_]+)\s+(?:whispers to you|whispers):\s*(.+)$/i) || clean.match(/^\[([a-zA-Z0-9_]+)\s*->\s*(?:you|BuilderBot)\]\s*(.+)$/i);
+  if (whisperMatch) {
+    const [, username, text] = whisperMatch;
+    const cmdText = text.trim().startsWith('!') ? text.trim() : '!' + text.trim();
+    handleCommandArgs(username, cmdText);
     return;
   }
 
