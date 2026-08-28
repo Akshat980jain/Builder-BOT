@@ -399,20 +399,26 @@ function createBot() {
     if (bot && bot.entity) handleMobDefense();
   }, 1500);
 
-  bot.on('messagestr', (message) => {
-    handleChatCommand(message);
-  });
+  let lastCommandTime = 0;
+  let lastCommandText = '';
 
   bot.on('chat', (username, message) => {
     if (username === bot.username) return;
-    handleCommandArgs(username, message);
+    const now = Date.now();
+    const cleanMsg = message.trim();
+    if (cleanMsg === lastCommandText && (now - lastCommandTime) < 1000) {
+      return; // Skip duplicate command within 1 second
+    }
+    lastCommandTime = now;
+    lastCommandText = cleanMsg;
+    handleCommandArgs(username, cleanMsg);
   });
 
   bot.on('whisper', (username, message) => {
     if (username === bot.username) return;
     logSystem(`[Whisper from ${username}] ${message}`);
-    const cmdText = message.trim().startsWith('!') ? message.trim() : '!' + message.trim();
-    handleCommandArgs(username, cmdText);
+    const cleanMsg = message.trim().startsWith('!') ? message.trim() : '!' + message.trim();
+    handleCommandArgs(username, cleanMsg);
   });
 
   bot.on('builder_place_error', (pos, err) => {

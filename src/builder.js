@@ -134,7 +134,7 @@ class Builder {
 
     for (const c of candidates) {
       const block = bot.blockAt(c.pos);
-      if (block && block.boundingBox === 'block') {
+      if (block && block.name && !block.name.includes('air') && block.name !== 'water' && block.name !== 'lava') {
         return { refPos: c.pos, faceVector: c.face };
       }
     }
