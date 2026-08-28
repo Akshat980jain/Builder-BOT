@@ -88,8 +88,22 @@ class Builder {
         i.name.includes('concrete') || i.name.includes('terracotta')
       );
     }
+
+    // Creative mode infinite block generator
+    if (!item && bot.creative && typeof bot.creative.setInventorySlot === 'function') {
+      try {
+        const mcData = require('minecraft-data')(bot.version || '1.21.4');
+        const blockItem = mcData?.itemsByName[this.blockName] || mcData?.itemsByName['sandstone'] || mcData?.itemsByName['cobblestone'];
+        if (blockItem) {
+          const Item = require('prismarine-item')(bot.version || '1.21.4');
+          await bot.creative.setInventorySlot(36, new Item(blockItem.id, 64));
+          item = bot.inventory.items().find((i) => i.name === this.blockName || i.name === blockItem.name);
+        }
+      } catch (e) {}
+    }
+
     if (!item) {
-      throw new Error(`Out of building blocks (tried ${this.blockName}) — please toss some blocks to the bot.`);
+      throw new Error(`Out of building blocks (tried ${this.blockName}) — please drop some blocks to the bot or set creative mode with: /gamemode creative ${bot.username}`);
     }
     await bot.equip(item, 'hand');
 

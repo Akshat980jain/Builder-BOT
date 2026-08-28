@@ -516,6 +516,14 @@ function handleCommandArgs(username, text) {
       return runUndo(username);
     case 'stop':
       return stopBuild(username);
+    case 'help':
+      safeChat(`[BuilderBot Commands] !pyramid <size>, !dome <r>, !tower <r> <h>, !come, !undo, !stop`);
+      return;
+    case 'status':
+      const pos = bot.entity ? bot.entity.position : null;
+      const posStr = pos ? `(${Math.round(pos.x)}, ${Math.round(pos.y)}, ${Math.round(pos.z)})` : 'unknown';
+      safeChat(`[Status] Health: ${Math.round(bot.health || 20)}/20 | Position: ${posStr} | Building: ${builder.isBuilding() ? 'Active' : 'Idle'}`);
+      return;
     default:
       return;
   }
