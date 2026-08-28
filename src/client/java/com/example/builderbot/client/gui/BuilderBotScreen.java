@@ -329,13 +329,15 @@ public class BuilderBotScreen extends Screen {
         addPageWidget(clearArea32);
 
         // Flight Mode Toggle
+        boolean isFlying = bot != null && bot.isFlying();
         Button toggleFlyBtn = Button.builder(
-                Component.literal(bot.isFlying() ? "🕊 Flight: ENABLED" : "🚶 Flight: DISABLED")
-                        .withStyle(bot.isFlying() ? ChatFormatting.AQUA : ChatFormatting.GRAY),
+                Component.literal(isFlying ? "🕊 Flight: ENABLED" : "🚶 Flight: DISABLED")
+                        .withStyle(isFlying ? ChatFormatting.AQUA : ChatFormatting.GRAY),
                 btn -> {
                     runCommand("builderbot fly");
-                    btn.setMessage(Component.literal(!bot.isFlying() ? "🕊 Flight: ENABLED" : "🚶 Flight: DISABLED")
-                            .withStyle(!bot.isFlying() ? ChatFormatting.AQUA : ChatFormatting.GRAY));
+                    boolean nowFlying = bot != null && !bot.isFlying();
+                    btn.setMessage(Component.literal(nowFlying ? "🕊 Flight: ENABLED" : "🚶 Flight: DISABLED")
+                            .withStyle(nowFlying ? ChatFormatting.AQUA : ChatFormatting.GRAY));
                 }
         ).bounds(rightX, startY, btnW, 20).build();
         addPageWidget(toggleFlyBtn);
@@ -508,7 +510,33 @@ public class BuilderBotScreen extends Screen {
 
     private void runCommand(String command) {
         if (Minecraft.getInstance().player != null && Minecraft.getInstance().player.connection != null) {
-            Minecraft.getInstance().player.connection.sendCommand(command);
+            var conn = Minecraft.getInstance().player.connection;
+            // Send slash command to server
+            conn.sendCommand(command);
+
+            // Also forward equivalent chat command for vanilla/cloud BuilderBot
+            if (command.startsWith("builderbot generate pyramid ")) {
+                String size = command.substring("builderbot generate pyramid ".length()).trim();
+                conn.sendChat("!pyramid " + size);
+            } else if (command.startsWith("builderbot generate dome ")) {
+                String r = command.substring("builderbot generate dome ".length()).trim();
+                conn.sendChat("!dome " + r);
+            } else if (command.startsWith("builderbot generate tower ")) {
+                String args = command.substring("builderbot generate tower ".length()).trim();
+                conn.sendChat("!tower " + args);
+            } else if (command.startsWith("builderbot generate stairs ")) {
+                String args = command.substring("builderbot generate stairs ".length()).trim();
+                conn.sendChat("!stairs " + args);
+            } else if (command.equals("builderbot undo") || command.contains("undo")) {
+                conn.sendChat("!undo");
+            } else if (command.equals("builderbot stop") || command.equals("builderbot stopall")) {
+                conn.sendChat("!stop");
+            } else if (command.equals("builderbot tp")) {
+                conn.sendChat("!come");
+            } else if (command.contains("schematic ")) {
+                String name = command.substring(command.indexOf("schematic ") + "schematic ".length()).trim();
+                conn.sendChat("!schematic " + name);
+            }
         }
     }
 
@@ -525,7 +553,7 @@ public class BuilderBotScreen extends Screen {
         guiGraphics.text(this.font, "🤖 BUILDER BOT CONTROL SUITE", winX + 12, winY + 8, 0xFFF59E0B);
 
         // Status Card
-        BuildPlan plan = bot.getCurrentPlan();
+        BuildPlan plan = bot != null ? bot.getCurrentPlan() : null;
         boolean isBuilding = plan != null && !plan.isEmpty();
         if (isBuilding) {
             String statusText = String.format("🔨 Building: %d/%d blocks (%d%%)",
