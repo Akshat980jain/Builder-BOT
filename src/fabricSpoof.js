@@ -1,10 +1,9 @@
 'use strict';
 
 /**
- * Universal Fabric Protocol & Registry Handshake Spoofer.
- * Intercepts both Configuration and Play state custom payload packets
- * to satisfy Fabric Loader, Fabric API, BetterEnd, BCLib, and EffortlessBuilding
- * without requiring client-side mod installations.
+ * Universal Fabric Protocol & 1.21.x Configuration State Handler.
+ * Handles known_packs negotiation, registry sync ACKs, and finish_configuration
+ * to achieve instant, sub-second spawning into Minecraft 1.21.x / 26.2 worlds.
  */
 function installFabricSpoof(bot) {
   const client = bot._client;
@@ -47,7 +46,7 @@ function installFabricSpoof(bot) {
     } catch (e) {}
   }
 
-  // Hook on state changes
+  // Fast response on state changes
   client.on('state', (newState) => {
     if (newState === 'configuration' || newState === 'play') {
       sendFabricRegistration();
@@ -58,10 +57,27 @@ function installFabricSpoof(bot) {
     sendFabricRegistration();
   });
 
-  // Complete configuration state transition
+  // Handle 1.20.5+ / 1.21.x / 26.2 Known Packs Negotiation
+  client.on('select_known_packs', (packet) => {
+    try {
+      console.log('[Fabric Spoof] Intercepted select_known_packs, sending known packs response...');
+      const knownPacks = packet.knownPacks || [
+        { namespace: 'minecraft', id: 'core', version: '1.21.4' }
+      ];
+      client.write('select_known_packs', { knownPacks });
+    } catch (e) {
+      try {
+        client.write('select_known_packs', {
+          knownPacks: [{ namespace: 'minecraft', id: 'core', version: '1.21.4' }]
+        });
+      } catch (err) {}
+    }
+  });
+
+  // Handle finish_configuration to immediately enter Play state
   client.on('finish_configuration', () => {
     try {
-      console.log('[Fabric Spoof] Received finish_configuration from server, acknowledging and entering play state...');
+      console.log('[Fabric Spoof] Received finish_configuration from server, acknowledging...');
       client.write('finish_configuration', {});
     } catch (e) {}
   });
@@ -69,6 +85,15 @@ function installFabricSpoof(bot) {
   // Catch custom payload packets in both Configuration and Play states
   client.on('packet', (data, meta) => {
     if (!meta) return;
+
+    if (meta.name === 'select_known_packs') {
+      try {
+        client.write('select_known_packs', {
+          knownPacks: data.knownPacks || [{ namespace: 'minecraft', id: 'core', version: '1.21.4' }]
+        });
+      } catch (e) {}
+      return;
+    }
 
     if (meta.name === 'finish_configuration') {
       try {
@@ -82,16 +107,20 @@ function installFabricSpoof(bot) {
 
     const channel = String(data.channel);
 
-    // Fabric Registry Sync ACK
+    // Fabric Registry Sync ACK (reply immediately on both channels)
     if (channel.startsWith('fabric:registry/sync') || channel.includes('registry/sync')) {
       try {
         console.log(`[Fabric Spoof] Intercepted registry sync (${channel}), responding with ACK...`);
         client.write('custom_payload', {
           channel: 'fabric:registry/sync',
-          data: Buffer.from([0x00]),
+          data: Buffer.alloc(0),
         });
         client.write('custom_payload', {
           channel: 'fabric:registry/sync/direct',
+          data: Buffer.alloc(0),
+        });
+        client.write('custom_payload', {
+          channel: 'fabric:registry/sync',
           data: Buffer.from([0x00]),
         });
       } catch (e) {
