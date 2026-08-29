@@ -315,6 +315,8 @@ function handleChatLine(username, text) {
     case 'undo':
       return runUndo(username);
     case 'stop':
+    case 'force-stop':
+    case 'cancel':
       return stopBuild(username);
     case 'status':
       const pos = bot.entity ? bot.entity.position : null;
@@ -419,7 +421,7 @@ function stopBuild(requester) {
     return;
   }
   builder.cancel();
-  safeChat('[Stop] Stopping after current block...');
+  safeChat('[Stop] Build stopped immediately.');
 }
 
 async function comeToPlayer(requester) {

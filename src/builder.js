@@ -3,12 +3,15 @@
 const { Vec3 } = require('vec3');
 
 /**
- * Drives a mineflayer bot through placing a queue of blocks.
- * Uses standard block placement packets so it works on any server (Survival or Creative)
- * without triggering command spam filters.
+ * High-performance, resilient builder engine for Mineflayer bots.
+ * Features:
+ * - Instant cancellation and pathfinder abort on !stop
+ * - Creative flight / fast positioning (no ground pathfinding hangs)
+ * - Safe pathfinding timeouts (never blocks execution)
+ * - Fast packet placement with timeout guards
  */
 class Builder {
-  constructor(bot, { blockName = 'cobblestone', placeDelayMs = 120, scaffoldBlock = 'dirt' } = {}) {
+  constructor(bot, { blockName = 'cobblestone', placeDelayMs = 100, scaffoldBlock = 'dirt' } = {}) {
     this.bot = bot;
     this.blockName = blockName;
     this.placeDelayMs = placeDelayMs;
@@ -44,11 +47,6 @@ class Builder {
     };
   }
 
-  /**
-   * Accepts either:
-   *  - an array of Vec3 offsets (uniform material — pyramid/dome/tower), or
-   *  - an array of { pos: Vec3, name: string, properties?: object } (schematics).
-   */
   enqueue(offsetsOrBlocks, origin) {
     const list = [];
     for (const item of offsetsOrBlocks) {
@@ -75,6 +73,14 @@ class Builder {
 
   cancel() {
     this.cancelled = true;
+    this.queue = [];
+    this.building = false;
+    try {
+      if (this.bot.pathfinder) {
+        this.bot.pathfinder.stop();
+        this.bot.pathfinder.setGoal(null);
+      }
+    } catch (e) {}
   }
 
   async run(onProgress) {
@@ -84,7 +90,6 @@ class Builder {
     this.building = true;
     this.cancelled = false;
 
-    const { goals } = require('mineflayer-pathfinder');
     const total = this.queue.length;
     this.currentJob.total = total;
     this.currentJob.placed = 0;
@@ -93,18 +98,20 @@ class Builder {
 
     let placed = 0;
     let retries = 0;
-    const maxRetries = total * 2;
+    const maxRetries = Math.min(total * 2, 500);
 
-    while (this.queue.length > 0 && !this.cancelled && retries < maxRetries) {
+    while (this.queue.length > 0 && !this.cancelled && this.building && retries < maxRetries) {
       const target = this.queue.shift();
+      if (!target) break;
+
       try {
-        const didPlace = await this._placeOne(target, goals);
+        const didPlace = await this._placeOne(target);
         if (didPlace) {
           this.placedHistory.push(target);
           placed++;
           this.currentJob.placed = placed;
 
-          if (onProgress && placed % 50 === 0) {
+          if (onProgress && (placed % 25 === 0 || placed === total)) {
             const left = total - placed;
             const percent = ((placed / total) * 100).toFixed(1);
             onProgress(placed, total, left, percent, false);
@@ -121,8 +128,6 @@ class Builder {
       await sleep(this.placeDelayMs);
     }
 
-    await this._removeScaffolding(goals);
-
     this.building = false;
     const left = Math.max(0, total - placed);
     const percent = total > 0 ? ((placed / total) * 100).toFixed(1) : 100;
@@ -130,34 +135,30 @@ class Builder {
     return { placed, total, left, percent, cancelled: this.cancelled };
   }
 
-  async _placeOne(target, goals) {
+  async _placeOne(target) {
+    if (this.cancelled) return false;
     const bot = this.bot;
 
-    // 1. Skip if already placed
+    // 1. Skip if already placed / solid
     const current = bot.blockAt(target.pos);
     if (current && current.name && !current.name.includes('air') && current.name !== 'water' && current.name !== 'lava') {
       return false;
     }
 
-    // 2. Find solid reference block
+    // 2. Find solid reference block to place against
     let referenceInfo = this._findReferenceBlock(target.pos);
     if (!referenceInfo) {
-      referenceInfo = await this._buildScaffoldAndFindReference(target.pos, goals);
+      referenceInfo = await this._ensureReference(target.pos);
     }
     if (!referenceInfo) {
       throw new Error(`No reachable reference block found for ${target.pos}`);
     }
     const { refPos, faceVector } = referenceInfo;
 
-    // 3. Move closer if further than 4 blocks
-    const currentPos = bot.entity ? bot.entity.position : new Vec3(0, 64, 0);
-    if (currentPos.distanceTo(refPos) > 4.2) {
-      try {
-        await bot.pathfinder.goto(new goals.GoalNear(refPos.x, refPos.y, refPos.z, 3));
-      } catch (e) {}
-    }
+    // 3. Move/Fly close enough to place (within 4 blocks)
+    await this._moveToPosition(refPos);
 
-    // 4. Find or replenish building block
+    // 4. Ensure we have the building block in inventory
     const cleanName = (target.name || this.blockName).replace('minecraft:', '');
     let item = bot.inventory.items().find((i) => i.name === cleanName);
     if (!item) {
@@ -168,8 +169,9 @@ class Builder {
       );
     }
 
-    // Creative mode auto-restock
-    if (!item && bot.creative && typeof bot.creative.setInventorySlot === 'function') {
+    // Creative mode infinite supply
+    const isCreative = bot.game?.gameMode === 'creative';
+    if (!item && isCreative && bot.creative && typeof bot.creative.setInventorySlot === 'function') {
       try {
         const mcData = require('minecraft-data')(bot.version || '1.21.4');
         const blockItem = mcData?.itemsByName[cleanName] || mcData?.itemsByName[this.blockName] || mcData?.itemsByName['deepslate_bricks'] || mcData?.itemsByName['cobblestone'];
@@ -182,7 +184,7 @@ class Builder {
     }
 
     if (!item) {
-      throw new Error(`Out of building blocks (tried ${cleanName}) — please drop blocks or run: /gamemode creative ${bot.username}`);
+      throw new Error(`Out of blocks (${cleanName}) — toss blocks to bot or use /gamemode creative ${bot.username}`);
     }
 
     // 5. Equip
@@ -197,15 +199,56 @@ class Builder {
       throw new Error(`Reference block at ${refPos} not loaded.`);
     }
 
-    // 6. Look at face & place
+    // 6. Look at target face and place block with timeout protection
     const faceOffset = new Vec3(
       0.5 + faceVector.x * 0.5,
       0.5 + faceVector.y * 0.5,
       0.5 + faceVector.z * 0.5
     );
-    await bot.lookAt(refBlock.position.plus(faceOffset), true);
-    await bot.placeBlock(refBlock, faceVector);
-    return true;
+
+    try {
+      await withTimeout(bot.lookAt(refBlock.position.plus(faceOffset), true), 400);
+    } catch (e) {}
+
+    try {
+      await withTimeout(bot.placeBlock(refBlock, faceVector), 800);
+      return true;
+    } catch (err) {
+      // Check if block was placed regardless of packet ack
+      const verify = bot.blockAt(target.pos);
+      if (verify && verify.name && !verify.name.includes('air')) {
+        return true;
+      }
+      throw err;
+    }
+  }
+
+  async _moveToPosition(pos) {
+    const bot = this.bot;
+    const currentPos = bot.entity ? bot.entity.position : new Vec3(0, 64, 0);
+    const dist = currentPos.distanceTo(pos);
+
+    if (dist <= 4.0) return; // Already in reach!
+
+    const isCreative = bot.game?.gameMode === 'creative';
+    if (isCreative && bot.creative && typeof bot.creative.flyTo === 'function') {
+      try {
+        const flyTarget = new Vec3(pos.x, pos.y + 2, pos.z + 2);
+        await withTimeout(bot.creative.flyTo(flyTarget), 1500);
+        return;
+      } catch (e) {}
+    }
+
+    // Survival pathfinding with strict 2.0s timeout
+    try {
+      const { goals } = require('mineflayer-pathfinder');
+      await withTimeout(bot.pathfinder.goto(new goals.GoalNear(pos.x, pos.y, pos.z, 3)), 2000);
+    } catch (e) {
+      // If pathfinding timed out, try looking towards it anyway
+      try {
+        await bot.lookAt(pos, true);
+      } catch (err) {}
+    }
   }
 
   _findReferenceBlock(target) {
@@ -218,6 +261,7 @@ class Builder {
       { pos: target.offset(0, 0, -1), face: new Vec3(0, 0, 1) },
       { pos: target.offset(0, 1, 0), face: new Vec3(0, -1, 0) },
     ];
+
     for (const c of candidates) {
       const block = bot.blockAt(c.pos);
       if (block && block.name && !block.name.includes('air') && block.name !== 'water' && block.name !== 'lava') {
@@ -227,72 +271,32 @@ class Builder {
     return null;
   }
 
-  async _buildScaffoldAndFindReference(target, goals) {
+  async _ensureReference(target) {
     const bot = this.bot;
-    const item = bot.inventory.items().find((i) => i.name === this.scaffoldBlock || i.name.includes('dirt') || i.name.includes('cobble'));
-    if (!item && (!bot.creative || typeof bot.creative.setInventorySlot !== 'function')) return null;
+    // Check if bottom neighbor is water/air and place a single base block directly below
+    const below = target.offset(0, -1, 0);
+    const belowBlock = bot.blockAt(below);
 
-    let groundY = null;
-    for (let dy = 1; dy <= 40; dy++) {
-      const checkPos = target.offset(0, -dy, 0);
-      const block = bot.blockAt(checkPos);
-      if (block && block.name && !block.name.includes('air') && block.name !== 'water' && block.name !== 'lava') {
-        groundY = checkPos.y;
-        break;
+    // If standing in water/air, try placing on the block beneath it
+    const candidates = [
+      { pos: below.offset(0, -1, 0), face: new Vec3(0, 1, 0) },
+      { pos: below.offset(1, 0, 0), face: new Vec3(-1, 0, 0) },
+      { pos: below.offset(-1, 0, 0), face: new Vec3(1, 0, 0) },
+      { pos: below.offset(0, 0, 1), face: new Vec3(0, 0, -1) },
+      { pos: below.offset(0, 0, -1), face: new Vec3(0, 0, 1) },
+    ];
+
+    for (const c of candidates) {
+      const b = bot.blockAt(c.pos);
+      if (b && b.name && !b.name.includes('air') && b.name !== 'water' && b.name !== 'lava') {
+        return { refPos: c.pos, faceVector: c.face };
       }
     }
-    if (groundY === null) return null;
-
-    for (let y = groundY + 1; y < target.y; y++) {
-      const pillarPos = new Vec3(target.x, y, target.z);
-      const existing = bot.blockAt(pillarPos);
-      if (existing && existing.name && !existing.name.includes('air')) continue;
-
-      const below = new Vec3(target.x, y - 1, target.z);
-      try {
-        await bot.pathfinder.goto(new goals.GoalNear(below.x, below.y, below.z, 3));
-      } catch (e) {}
-
-      const belowBlock = bot.blockAt(below);
-      if (!belowBlock) break;
-
-      let scaffoldItem = bot.inventory.items().find((i) => i.name === this.scaffoldBlock || i.name.includes('dirt') || i.name.includes('cobble'));
-      if (!scaffoldItem && bot.creative && typeof bot.creative.setInventorySlot === 'function') {
-        try {
-          const Item = require('prismarine-item')(bot.version || '1.21.4');
-          await bot.creative.setInventorySlot(36, new Item(1, 64));
-          scaffoldItem = bot.inventory.items()[0];
-        } catch (e) {}
-      }
-
-      if (!scaffoldItem) break;
-      await bot.equip(scaffoldItem, 'hand');
-      await bot.placeBlock(belowBlock, new Vec3(0, 1, 0));
-      this.scaffoldHistory.push(pillarPos);
-    }
-
-    return this._findReferenceBlock(target);
-  }
-
-  async _removeScaffolding(goals) {
-    const bot = this.bot;
-    while (this.scaffoldHistory.length > 0) {
-      const pos = this.scaffoldHistory.pop();
-      const block = bot.blockAt(pos);
-      if (block && block.name && !block.name.includes('air')) {
-        try {
-          const currentPos = bot.entity ? bot.entity.position : new Vec3(0, 64, 0);
-          if (currentPos.distanceTo(pos) > 4.2) {
-            await bot.pathfinder.goto(new goals.GoalNear(pos.x, pos.y, pos.z, 3));
-          }
-          await bot.dig(block);
-        } catch (err) {}
-      }
-    }
+    return null;
   }
 
   async undo(onProgress) {
-    const { goals } = require('mineflayer-pathfinder');
+    this.cancel();
     const bot = this.bot;
     const total = this.placedHistory.length;
     let undone = 0;
@@ -304,10 +308,10 @@ class Builder {
       if (block && block.name && !block.name.includes('air')) {
         try {
           const currentPos = bot.entity ? bot.entity.position : new Vec3(0, 64, 0);
-          if (currentPos.distanceTo(pos) > 4.2) {
-            await bot.pathfinder.goto(new goals.GoalNear(pos.x, pos.y, pos.z, 3));
+          if (currentPos.distanceTo(pos) > 4.0) {
+            await this._moveToPosition(pos);
           }
-          await bot.dig(block);
+          await withTimeout(bot.dig(block), 1500);
         } catch (err) {
           bot.emit('builder_undo_error', pos, err);
         }
@@ -321,8 +325,15 @@ class Builder {
   }
 }
 
+function withTimeout(promise, ms) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(`Timeout after ${ms}ms`)), ms)),
+  ]);
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-module.exports = { Builder };
+module.exports = { Builder, withTimeout };
