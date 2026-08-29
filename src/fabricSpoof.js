@@ -58,9 +58,26 @@ function installFabricSpoof(bot) {
     sendFabricRegistration();
   });
 
+  // Complete configuration state transition
+  client.on('finish_configuration', () => {
+    try {
+      console.log('[Fabric Spoof] Received finish_configuration from server, acknowledging and entering play state...');
+      client.write('finish_configuration', {});
+    } catch (e) {}
+  });
+
   // Catch custom payload packets in both Configuration and Play states
   client.on('packet', (data, meta) => {
-    if (!meta || (meta.name !== 'custom_payload' && meta.name !== 'custom_report')) return;
+    if (!meta) return;
+
+    if (meta.name === 'finish_configuration') {
+      try {
+        client.write('finish_configuration', {});
+      } catch (e) {}
+      return;
+    }
+
+    if (meta.name !== 'custom_payload' && meta.name !== 'custom_report') return;
     if (!data || !data.channel) return;
 
     const channel = String(data.channel);
