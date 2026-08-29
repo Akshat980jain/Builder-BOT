@@ -19,15 +19,15 @@ const { parseLitematicBlocks, parseStructureNbtBlocks } = require('./src/schemat
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
-const REAL_SERVER_HOST = process.env.MC_HOST || 'akshat980jain-llhY.aternos.me';
-const REAL_SERVER_PORT = process.env.MC_PORT || '30929';
-const REAL_SERVER_VERSION = process.env.MC_VERSION || '26.2';
+const REAL_SERVER_HOST = process.env.SERVER_HOST || process.env.MC_HOST || 'barramundi.aternos.host';
+const REAL_SERVER_PORT = process.env.SERVER_PORT || process.env.MC_PORT || '18774';
+const REAL_SERVER_VERSION = process.env.BOT_VERSION || process.env.MC_VERSION || '26.2';
 
 const VIAPROXY_HOST = '127.0.0.1';
 const VIAPROXY_PORT = process.env.VIAPROXY_PORT || '25577';
 const BOT_PROTOCOL_VERSION = process.env.BOT_PROTOCOL_VERSION || '1.21.4';
 
-const BOT_USERNAME = process.env.BOT_USERNAME || 'BuilderBot';
+const BOT_USERNAME = process.env.BOT_NAME || process.env.BOT_USERNAME || 'BuilderBot';
 const RECONNECT_DELAY_MS = 10_000;
 const DUPLICATE_LOGIN_RECONNECT_DELAY_MS = 18_000;
 const HTTP_PORT = process.env.PORT || 8080;

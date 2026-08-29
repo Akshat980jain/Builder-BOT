@@ -2,9 +2,9 @@
 set -e
 
 VIAPROXY_PORT="${VIAPROXY_PORT:-25577}"
-MC_HOST="${MC_HOST:-${SERVER_HOST:-localhost}}"
-MC_PORT="${MC_PORT:-${SERVER_PORT:-25565}}"
-MC_VERSION="${MC_VERSION:-26.2}"
+MC_HOST="${SERVER_HOST:-${MC_HOST:-barramundi.aternos.host}}"
+MC_PORT="${SERVER_PORT:-${MC_PORT:-18774}}"
+MC_VERSION="${BOT_VERSION:-${MC_VERSION:-26.2}}"
 
 echo "[start.sh] Launching ViaProxy: 127.0.0.1:${VIAPROXY_PORT} -> ${MC_HOST}:${MC_PORT} (target-version ${MC_VERSION})"
 
