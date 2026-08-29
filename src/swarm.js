@@ -13,7 +13,7 @@ class SwarmManager {
     host = '127.0.0.1',
     port = 25577,
     version = '1.21.4',
-    maxWorkers = 5,
+    maxWorkers = 10,
     placeDelayMs = 80,
   } = {}) {
     this.mainBot = mainBot;
