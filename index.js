@@ -256,6 +256,37 @@ function resolveOrigin(requester, explicitOrigin) {
   return player ? player.position.floored() : (bot.entity ? bot.entity.position.floored() : new Vec3(0, 64, 0));
 }
 
+function parseSchematicCommand(args) {
+  let rotation = 0;
+  let origin = null;
+  const nameTokens = [...args];
+
+  if (nameTokens.length >= 4 &&
+      /^-?\d+$/.test(nameTokens[nameTokens.length - 4]) &&
+      /^-?\d+$/.test(nameTokens[nameTokens.length - 3]) &&
+      /^-?\d+$/.test(nameTokens[nameTokens.length - 2]) &&
+      VALID_ROTATIONS.has(nameTokens[nameTokens.length - 1])) {
+    rotation = parseInt(nameTokens.pop(), 10);
+    const z = parseInt(nameTokens.pop(), 10);
+    const y = parseInt(nameTokens.pop(), 10);
+    const x = parseInt(nameTokens.pop(), 10);
+    origin = new Vec3(x, y, z);
+  } else if (nameTokens.length >= 3 &&
+      /^-?\d+$/.test(nameTokens[nameTokens.length - 3]) &&
+      /^-?\d+$/.test(nameTokens[nameTokens.length - 2]) &&
+      /^-?\d+$/.test(nameTokens[nameTokens.length - 1])) {
+    const z = parseInt(nameTokens.pop(), 10);
+    const y = parseInt(nameTokens.pop(), 10);
+    const x = parseInt(nameTokens.pop(), 10);
+    origin = new Vec3(x, y, z);
+  } else if (nameTokens.length >= 2 && VALID_ROTATIONS.has(nameTokens[nameTokens.length - 1])) {
+    rotation = parseInt(nameTokens.pop(), 10);
+  }
+
+  const name = nameTokens.join(' ').trim();
+  return { name, coordInfo: { origin, rotation } };
+}
+
 function handleChatLine(username, text) {
   if (!text.startsWith('!')) return;
   const args = text.trim().slice(1).split(/\s+/);
@@ -279,7 +310,8 @@ function handleChatLine(username, text) {
         parseCoordsAndRotation(args.slice(2))
       );
     case 'schematic':
-      return runSchematicBuild(username, args[0], parseCoordsAndRotation(args.slice(1)));
+      const parsed = parseSchematicCommand(args);
+      return runSchematicBuild(username, parsed.name, parsed.coordInfo);
     case 'come':
       return comeToPlayer(username);
     case 'undo':
