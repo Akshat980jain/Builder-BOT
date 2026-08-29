@@ -1,12 +1,5 @@
 'use strict';
 
-/**
- * Logs every raw packet in both directions during the configuration phase
- * (and briefly into play), so a stuck handshake shows exactly which packet
- * never arrived or never got a reply — instead of guessing.
- *
- * Enable with DEBUG_PACKETS=true.
- */
 function installPacketDebugger(bot) {
   const client = bot._client;
   if (!client) return;
@@ -17,12 +10,20 @@ function installPacketDebugger(bot) {
   }
 
   client.on('packet', (data, meta) => {
-    console.log(`[PKT IN  ${ts()}] state=${meta.state} name=${meta.name}`);
+    if (meta.name === 'custom_payload' || meta.name === 'custom_report') {
+      console.log(`[PKT IN  ${ts()}] state=${meta.state} name=${meta.name} channel=${data?.channel}`);
+    } else {
+      console.log(`[PKT IN  ${ts()}] state=${meta.state} name=${meta.name}`);
+    }
   });
 
   const originalWrite = client.write.bind(client);
   client.write = (name, params) => {
-    console.log(`[PKT OUT ${ts()}] state=${client.state} name=${name}`);
+    if (name === 'custom_payload') {
+      console.log(`[PKT OUT ${ts()}] state=${client.state} name=${name} channel=${params?.channel}`);
+    } else {
+      console.log(`[PKT OUT ${ts()}] state=${client.state} name=${name}`);
+    }
     return originalWrite(name, params);
   };
 
@@ -31,7 +32,7 @@ function installPacketDebugger(bot) {
   });
 
   client.on('select_known_packs', (data) => {
-    console.log(`[WATCH   ${ts()}] select_known_packs received:`, JSON.stringify(data));
+    console.log(`[WATCH   ${ts()}] select_known_packs received`);
   });
 
   client.on('finish_configuration', () => {
