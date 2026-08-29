@@ -6,7 +6,6 @@ const { Vec3 } = require('vec3');
 function blockToItemName(blockName) {
   const clean = blockName.replace('minecraft:', '').toLowerCase();
 
-  // Wall variants of blocks
   if (clean.endsWith('_wall_sign')) return clean.replace('_wall_sign', '_sign');
   if (clean.endsWith('_wall_hanging_sign')) return clean.replace('_wall_hanging_sign', '_hanging_sign');
   if (clean.endsWith('_wall_fan')) return clean.replace('_wall_fan', '_fan');
@@ -16,7 +15,6 @@ function blockToItemName(blockName) {
   if (clean === 'soul_wall_torch') return 'soul_torch';
   if (clean === 'redstone_wall_torch') return 'redstone_torch';
 
-  // Special block to item conversions
   const specialMap = {
     redstone_wire: 'redstone',
     tripwire: 'string',
@@ -41,14 +39,15 @@ function blockToItemName(blockName) {
 /**
  * High-performance, resilient builder engine for Mineflayer bots.
  * Features:
+ * - Anti-Self-Collision: automatically steps back so the bot never collides with target blocks
+ * - Arm-swing animation for visible, physical block placement
  * - 100% exact per-block schematic material palette reproduction
  * - Auto-Creative item provisioning for every block in the schematic
  * - Automatic Ground Anchor for floating/mid-air/water builds
  * - Instant cancellation and pathfinder abort on !stop
- * - Creative flight / fast positioning
  */
 class Builder {
-  constructor(bot, { blockName = 'cobblestone', placeDelayMs = 100, scaffoldBlock = 'dirt' } = {}) {
+  constructor(bot, { blockName = 'cobblestone', placeDelayMs = 90, scaffoldBlock = 'dirt' } = {}) {
     this.bot = bot;
     this.blockName = blockName;
     this.placeDelayMs = placeDelayMs;
@@ -140,7 +139,7 @@ class Builder {
 
     let placed = 0;
     let consecutiveFails = 0;
-    const maxConsecutiveFails = Math.max(total * 2, 100);
+    const maxConsecutiveFails = Math.max(total * 2, 200);
 
     while (this.queue.length > 0 && !this.cancelled && this.building && consecutiveFails < maxConsecutiveFails) {
       const target = this.queue.shift();
@@ -152,7 +151,7 @@ class Builder {
           this.placedHistory.push(target);
           placed++;
           this.currentJob.placed = placed;
-          consecutiveFails = 0; // Reset fail counter on every successful placement!
+          consecutiveFails = 0;
 
           if (onProgress && (placed % 25 === 0 || placed === total)) {
             const left = total - placed;
@@ -194,8 +193,8 @@ class Builder {
     }
     const { refPos, faceVector } = referenceInfo;
 
-    // 3. Move/Fly close enough to place (within 4 blocks)
-    await this._moveToPosition(refPos);
+    // 3. Move/Fly close enough to place AND ensure bot does not collide with target.pos
+    await this._moveToPosition(target.pos, refPos);
 
     // 4. Resolve exact item for the target block
     const targetBlockName = (target.name || this.blockName).replace('minecraft:', '');
@@ -225,7 +224,7 @@ class Builder {
       throw new Error(`Out of material: ${itemName} (for ${targetBlockName})`);
     }
 
-    // 6. Equip to main hand
+    // 6. Equip to main hand (updates held item visually)
     if (!bot.heldItem || (bot.heldItem.name !== item.name && bot.heldItem.name !== itemName)) {
       try {
         await bot.equip(item, 'hand');
@@ -245,11 +244,12 @@ class Builder {
     );
 
     try {
-      await withTimeout(bot.lookAt(refBlock.position.plus(faceOffset), true), 400);
+      await withTimeout(bot.lookAt(refBlock.position.plus(faceOffset), true), 300);
     } catch (e) {}
 
     try {
-      await withTimeout(bot.placeBlock(refBlock, faceVector), 800);
+      await withTimeout(bot.placeBlock(refBlock, faceVector), 600);
+      try { bot.swingArm('right'); } catch (e) {}
       return true;
     } catch (err) {
       const verify = bot.blockAt(target.pos);
@@ -260,29 +260,35 @@ class Builder {
     }
   }
 
-  async _moveToPosition(pos) {
+  async _moveToPosition(targetPos, refPos) {
     const bot = this.bot;
     const currentPos = bot.entity ? bot.entity.position : new Vec3(0, 64, 0);
-    const dist = currentPos.distanceTo(pos);
+    const distToTarget = currentPos.distanceTo(targetPos);
+    const distToRef = currentPos.distanceTo(refPos);
 
-    if (dist <= 4.0) return;
-
-    const isCreative = bot.game?.gameMode === 'creative' || true;
-    if (isCreative && bot.creative && typeof bot.creative.flyTo === 'function') {
-      try {
-        const flyTarget = new Vec3(pos.x, pos.y + 2, pos.z + 2);
-        await withTimeout(bot.creative.flyTo(flyTarget), 1500);
-        return;
-      } catch (e) {}
+    // Anti-collision: if bot is standing inside the target block (< 1.1 blocks), step back!
+    if (distToTarget < 1.2) {
+      const stepBack = new Vec3(
+        targetPos.x + (currentPos.x >= targetPos.x ? 1.5 : -1.5),
+        Math.max(targetPos.y, currentPos.y),
+        targetPos.z + (currentPos.z >= targetPos.z ? 1.5 : -1.5)
+      );
+      if (bot.creative && typeof bot.creative.flyTo === 'function') {
+        try { await withTimeout(bot.creative.flyTo(stepBack), 600); } catch (e) {}
+      }
     }
 
-    try {
-      const { goals } = require('mineflayer-pathfinder');
-      await withTimeout(bot.pathfinder.goto(new goals.GoalNear(pos.x, pos.y, pos.z, 3)), 2000);
-    } catch (e) {
-      try {
-        await bot.lookAt(pos, true);
-      } catch (err) {}
+    // If too far from reference block (> 3.8 blocks), move closer
+    if (distToRef > 3.8) {
+      const standPos = new Vec3(refPos.x + 1.2, refPos.y + 1.2, refPos.z + 1.2);
+      if (bot.creative && typeof bot.creative.flyTo === 'function') {
+        try { await withTimeout(bot.creative.flyTo(standPos), 1000); } catch (e) {}
+      } else {
+        try {
+          const { goals } = require('mineflayer-pathfinder');
+          await withTimeout(bot.pathfinder.goto(new goals.GoalNear(refPos.x, refPos.y, refPos.z, 2.5)), 1500);
+        } catch (e) {}
+      }
     }
   }
 
@@ -306,15 +312,10 @@ class Builder {
     return null;
   }
 
-  /**
-   * If a schematic starts floating in the air or over water with no solid neighbors,
-   * this automatically scans down to solid ground and builds a foundation pillar.
-   */
   async _createGroundAnchor(targetPos) {
     const bot = this.bot;
     const targetY = targetPos.y;
 
-    // Scan down from targetPos to find solid ground
     let groundY = null;
     for (let y = targetY - 1; y >= Math.max(-60, targetY - 60); y--) {
       const checkPos = new Vec3(targetPos.x, y, targetPos.z);
@@ -325,7 +326,6 @@ class Builder {
       }
     }
 
-    // Fallback: check where the bot is standing if no direct ground
     if (groundY === null && bot.entity) {
       const botGround = bot.entity.position.floored().offset(0, -1, 0);
       const b = bot.blockAt(botGround);
@@ -335,7 +335,6 @@ class Builder {
       return null;
     }
 
-    // Prepare building block in creative
     if (bot.creative && typeof bot.creative.setInventorySlot === 'function') {
       try {
         const Item = require('prismarine-item')(bot.version || '1.21.4');
@@ -343,7 +342,6 @@ class Builder {
       } catch (e) {}
     }
 
-    // Pillar up from ground to targetY - 1
     for (let y = groundY + 1; y < targetY; y++) {
       const pillarPos = new Vec3(targetPos.x, y, targetPos.z);
       const cur = bot.blockAt(pillarPos);
@@ -353,9 +351,10 @@ class Builder {
       const belowBlock = bot.blockAt(below);
       if (!belowBlock) break;
 
-      await this._moveToPosition(below);
+      await this._moveToPosition(pillarPos, below);
       try {
-        await withTimeout(bot.placeBlock(belowBlock, new Vec3(0, 1, 0)), 800);
+        await withTimeout(bot.placeBlock(belowBlock, new Vec3(0, 1, 0)), 600);
+        try { bot.swingArm('right'); } catch (e) {}
         this.scaffoldHistory.push(pillarPos);
       } catch (e) {
         break;
@@ -379,7 +378,7 @@ class Builder {
         try {
           const currentPos = bot.entity ? bot.entity.position : new Vec3(0, 64, 0);
           if (currentPos.distanceTo(pos) > 4.0) {
-            await this._moveToPosition(pos);
+            await this._moveToPosition(pos, pos);
           }
           await withTimeout(bot.dig(block), 1500);
         } catch (err) {
