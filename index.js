@@ -161,6 +161,9 @@ function createBot() {
     const defaultMove = new Movements(bot);
     bot.pathfinder.setMovements(defaultMove);
 
+    // Enforce creative mode by default
+    safeChat('/gamemode creative BuilderBot');
+
     safeChat('[BuilderBot] Online! Use key B or: !schematic <name> [x y z] [rot], !pyramid, !dome, !tower, !come, !undo, !stop');
   });
 
@@ -341,6 +344,7 @@ async function runBuild(requester, offsets, coordInfo = { origin: null, rotation
     safeChat(`Already building — send !stop first, ${requester}.`);
     return;
   }
+  safeChat('/gamemode creative BuilderBot');
   builder.setJob(shapeName);
   const origin = resolveOrigin(requester, coordInfo.origin);
   builder.enqueue(offsets, origin);
@@ -375,6 +379,7 @@ async function runSchematicBuild(requester, name, coordInfo = { origin: null, ro
     return;
   }
 
+  safeChat('/gamemode creative BuilderBot');
   builder.setJob(name);
   const origin = resolveOrigin(requester, coordInfo.origin);
   builder.enqueue(blocks, origin);
