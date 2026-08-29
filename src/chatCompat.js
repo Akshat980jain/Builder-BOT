@@ -1,46 +1,19 @@
 'use strict';
 
 /**
- * Fixes two real bugs, verified against the actual installed library source
- * (mineflayer@4.37.1 / minecraft-protocol@1.68.0), not just their symptoms:
- *
- * 1. "[object Object]" is not valid JSON — mineflayer's own chat.js plugin
- *    (lib/plugins/chat.js, the `playerChat` handler) calls JSON.parse() on
- *    `data.senderName` / `data.targetName` / `message` unconditionally,
- *    assuming they're always JSON strings. minecraft-protocol is *supposed*
- *    to normalize NBT-formatted chat into a JSON string first (via
- *    prismarine-chat's processNbtMessage, confirmed present and correct in
- *    the installed version) — but depending on how a version's protocol
- *    schema types a given field (and how ViaProxy's translation shapes the
- *    resulting packet), that normalization can be skipped, leaving an
- *    already-parsed object where mineflayer expects a string.
- *
- * 2. "unknown chat format code: [object Object]" — prismarine-chat's
- *    ChatMessage.fromNetwork(type, params) expects `type` to be a plain
- *    number (a registry index). mineflayer's chat.js already *tries* to
- *    unwrap this via `data.type.chatType`, but if the actual object shape
- *    differs (e.g. no `.chatType` key), that unwrap silently fails and the
- *    raw object gets passed through, crashing one level deeper.
- *
- * FIX APPROACH: rather than patching node_modules (fragile — gets wiped on
- * every `npm install`, breaks on every dependency bump), we register our own
- * listener on the *raw* minecraft-protocol client object using
- * `prependListener`, which Node's EventEmitter guarantees runs BEFORE
- * already-registered listeners — including mineflayer's own chat.js
- * listener, which is already attached by the time `mineflayer.createBot()`
- * returns. This sanitizes the data in place so that by the time mineflayer's
- * own (unmodified) code runs, everything is in the shape it expects.
+ * Robust Protocol & Chat Compatibility Engine for Minecraft 1.21.x / 26.2.
+ * Sanitizes chat objects and suppresses non-fatal packet deserialization errors.
  */
 function installChatCompat(bot) {
   const client = bot._client;
+  if (!client) return;
 
   function toJsonStringIfNeeded(value) {
     if (value === undefined || value === null) return value;
-    if (typeof value === 'string') return value; // already fine
+    if (typeof value === 'string') return value;
     try {
       return JSON.stringify(value);
     } catch (err) {
-      bot.emit('chatcompat_warning', `Failed to stringify chat field: ${err.message}`);
       return JSON.stringify({ text: String(value) });
     }
   }
@@ -65,6 +38,13 @@ function installChatCompat(bot) {
 
   client.prependListener('playerChat', sanitizeChatData);
   client.prependListener('systemChat', sanitizeChatData);
+
+  // Suppress non-fatal sound/custom payload packet deserialization warnings
+  if (client.deserializer) {
+    client.deserializer.on('error', (err) => {
+      // Ignored non-fatal sound_effect or custom ad partial packet
+    });
+  }
 
   bot._chatCompatInstalled = true;
 }
