@@ -4,6 +4,7 @@ const mineflayer = require('mineflayer');
 const { pathfinder, Movements } = require('mineflayer-pathfinder');
 const { Builder } = require('./builder');
 const { installChatCompat } = require('./chatCompat');
+const { installFabricSpoof } = require('./fabricSpoof');
 
 /**
  * Manages a team of helper builder bots to build schematics in parallel.
@@ -73,6 +74,7 @@ class SwarmManager {
 
       bot.loadPlugin(pathfinder);
       installChatCompat(bot);
+      installFabricSpoof(bot);
       const builder = new Builder(bot, { placeDelayMs: this.placeDelayMs });
 
       const timeout = setTimeout(() => {
