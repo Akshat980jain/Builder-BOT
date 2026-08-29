@@ -43,6 +43,7 @@ function blockToItemName(blockName) {
  * Features:
  * - 100% exact per-block schematic material palette reproduction
  * - Auto-Creative item provisioning for every block in the schematic
+ * - Automatic Ground Anchor for floating/mid-air/water builds
  * - Instant cancellation and pathfinder abort on !stop
  * - Creative flight / fast positioning
  */
@@ -90,7 +91,7 @@ class Builder {
         list.push({ pos: origin.plus(item), name: this.blockName, properties: {} });
       } else if (item && item.pos) {
         const name = item.name || this.blockName;
-        // Skip liquids
+        // Skip liquid blocks
         if (name === 'minecraft:water' || name === 'minecraft:lava' || name === 'water' || name === 'lava') {
           continue;
         }
@@ -138,10 +139,10 @@ class Builder {
     this.placedHistory = [];
 
     let placed = 0;
-    let retries = 0;
-    const maxRetries = Math.min(total * 2, 500);
+    let consecutiveFails = 0;
+    const maxConsecutiveFails = Math.max(total * 2, 100);
 
-    while (this.queue.length > 0 && !this.cancelled && this.building && retries < maxRetries) {
+    while (this.queue.length > 0 && !this.cancelled && this.building && consecutiveFails < maxConsecutiveFails) {
       const target = this.queue.shift();
       if (!target) break;
 
@@ -151,6 +152,7 @@ class Builder {
           this.placedHistory.push(target);
           placed++;
           this.currentJob.placed = placed;
+          consecutiveFails = 0; // Reset fail counter on every successful placement!
 
           if (onProgress && (placed % 25 === 0 || placed === total)) {
             const left = total - placed;
@@ -159,12 +161,8 @@ class Builder {
           }
         }
       } catch (err) {
-        if (err.message && err.message.includes('No reachable reference') && retries < maxRetries) {
-          this.queue.push(target);
-          retries++;
-        } else {
-          this.bot.emit('builder_place_error', target.pos, err);
-        }
+        this.queue.push(target);
+        consecutiveFails++;
       }
       await sleep(this.placeDelayMs);
     }
@@ -189,7 +187,7 @@ class Builder {
     // 2. Find solid reference block to place against
     let referenceInfo = this._findReferenceBlock(target.pos);
     if (!referenceInfo) {
-      referenceInfo = await this._ensureReference(target.pos);
+      referenceInfo = await this._createGroundAnchor(target.pos);
     }
     if (!referenceInfo) {
       throw new Error(`No reachable reference block found for ${target.pos}`);
@@ -217,7 +215,6 @@ class Builder {
 
     let item = bot.inventory.items().find((i) => i.name === itemName || i.name === targetBlockName);
     if (!item) {
-      // If missing in survival, try matching base material (e.g. deepslate for deepslate_bricks)
       item = bot.inventory.items().find((i) =>
         i.name.includes(itemName) || i.name.includes(targetBlockName) ||
         (targetBlockName.includes('deepslate') && i.name.includes('deepslate'))
@@ -309,25 +306,63 @@ class Builder {
     return null;
   }
 
-  async _ensureReference(target) {
+  /**
+   * If a schematic starts floating in the air or over water with no solid neighbors,
+   * this automatically scans down to solid ground and builds a foundation pillar.
+   */
+  async _createGroundAnchor(targetPos) {
     const bot = this.bot;
-    const below = target.offset(0, -1, 0);
+    const targetY = targetPos.y;
 
-    const candidates = [
-      { pos: below.offset(0, -1, 0), face: new Vec3(0, 1, 0) },
-      { pos: below.offset(1, 0, 0), face: new Vec3(-1, 0, 0) },
-      { pos: below.offset(-1, 0, 0), face: new Vec3(1, 0, 0) },
-      { pos: below.offset(0, 0, 1), face: new Vec3(0, 0, -1) },
-      { pos: below.offset(0, 0, -1), face: new Vec3(0, 0, 1) },
-    ];
-
-    for (const c of candidates) {
-      const b = bot.blockAt(c.pos);
+    // Scan down from targetPos to find solid ground
+    let groundY = null;
+    for (let y = targetY - 1; y >= Math.max(-60, targetY - 60); y--) {
+      const checkPos = new Vec3(targetPos.x, y, targetPos.z);
+      const b = bot.blockAt(checkPos);
       if (b && b.name && !b.name.includes('air') && b.name !== 'water' && b.name !== 'lava') {
-        return { refPos: c.pos, faceVector: c.face };
+        groundY = y;
+        break;
       }
     }
-    return null;
+
+    // Fallback: check where the bot is standing if no direct ground
+    if (groundY === null && bot.entity) {
+      const botGround = bot.entity.position.floored().offset(0, -1, 0);
+      const b = bot.blockAt(botGround);
+      if (b && b.name && !b.name.includes('air')) {
+        return { refPos: botGround, faceVector: new Vec3(0, 1, 0) };
+      }
+      return null;
+    }
+
+    // Prepare building block in creative
+    if (bot.creative && typeof bot.creative.setInventorySlot === 'function') {
+      try {
+        const Item = require('prismarine-item')(bot.version || '1.21.4');
+        await bot.creative.setInventorySlot(36, new Item(1, 64)); // stone
+      } catch (e) {}
+    }
+
+    // Pillar up from ground to targetY - 1
+    for (let y = groundY + 1; y < targetY; y++) {
+      const pillarPos = new Vec3(targetPos.x, y, targetPos.z);
+      const cur = bot.blockAt(pillarPos);
+      if (cur && cur.name && !cur.name.includes('air') && cur.name !== 'water') continue;
+
+      const below = new Vec3(targetPos.x, y - 1, targetPos.z);
+      const belowBlock = bot.blockAt(below);
+      if (!belowBlock) break;
+
+      await this._moveToPosition(below);
+      try {
+        await withTimeout(bot.placeBlock(belowBlock, new Vec3(0, 1, 0)), 800);
+        this.scaffoldHistory.push(pillarPos);
+      } catch (e) {
+        break;
+      }
+    }
+
+    return this._findReferenceBlock(targetPos);
   }
 
   async undo(onProgress) {
