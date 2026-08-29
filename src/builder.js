@@ -39,6 +39,7 @@ function blockToItemName(blockName) {
 /**
  * High-performance, resilient builder engine for Mineflayer bots.
  * Features:
+ * - Zero-Skip Precision: clears/replaces natural ground obstacles if different from schematic
  * - Anti-Self-Collision: automatically steps back so the bot never collides with target blocks
  * - Arm-swing animation for visible, physical block placement
  * - 100% exact per-block schematic material palette reproduction
@@ -47,7 +48,7 @@ function blockToItemName(blockName) {
  * - Instant cancellation and pathfinder abort on !stop
  */
 class Builder {
-  constructor(bot, { blockName = 'cobblestone', placeDelayMs = 90, scaffoldBlock = 'dirt' } = {}) {
+  constructor(bot, { blockName = 'cobblestone', placeDelayMs = 80, scaffoldBlock = 'dirt' } = {}) {
     this.bot = bot;
     this.blockName = blockName;
     this.placeDelayMs = placeDelayMs;
@@ -177,13 +178,24 @@ class Builder {
     if (this.cancelled) return false;
     const bot = this.bot;
 
-    // 1. Skip if already placed / solid
+    const targetBlockName = (target.name || this.blockName).replace('minecraft:', '');
+    const itemName = blockToItemName(targetBlockName);
+
+    // 1. Check if the block at target.pos is ALREADY the exact target block
     const current = bot.blockAt(target.pos);
-    if (current && current.name && !current.name.includes('air') && current.name !== 'water' && current.name !== 'lava') {
-      return false;
+    if (current && current.name === targetBlockName) {
+      return false; // Already the exact correct schematic block!
     }
 
-    // 2. Find solid reference block to place against
+    // 2. If an unwanted obstacle is in the target position (e.g. natural dirt, stone, grass), clear it first!
+    if (current && current.name && !current.name.includes('air') && current.name !== 'water' && current.name !== 'lava') {
+      try {
+        await this._moveToPosition(target.pos, target.pos);
+        await withTimeout(bot.dig(current), 800);
+      } catch (e) {}
+    }
+
+    // 3. Find solid reference block to place against
     let referenceInfo = this._findReferenceBlock(target.pos);
     if (!referenceInfo) {
       referenceInfo = await this._createGroundAnchor(target.pos);
@@ -193,12 +205,8 @@ class Builder {
     }
     const { refPos, faceVector } = referenceInfo;
 
-    // 3. Move/Fly close enough to place AND ensure bot does not collide with target.pos
+    // 4. Move/Fly close enough to place AND ensure bot does not collide with target.pos
     await this._moveToPosition(target.pos, refPos);
-
-    // 4. Resolve exact item for the target block
-    const targetBlockName = (target.name || this.blockName).replace('minecraft:', '');
-    const itemName = blockToItemName(targetBlockName);
 
     // 5. Creative Mode Item Provisioning: Synthesize the exact matching item stack
     if (bot.creative && typeof bot.creative.setInventorySlot === 'function') {
@@ -266,7 +274,7 @@ class Builder {
     const distToTarget = currentPos.distanceTo(targetPos);
     const distToRef = currentPos.distanceTo(refPos);
 
-    // Anti-collision: if bot is standing inside the target block (< 1.1 blocks), step back!
+    // Anti-collision: if bot is standing inside the target block (< 1.2 blocks), step back!
     if (distToTarget < 1.2) {
       const stepBack = new Vec3(
         targetPos.x + (currentPos.x >= targetPos.x ? 1.5 : -1.5),
@@ -274,7 +282,7 @@ class Builder {
         targetPos.z + (currentPos.z >= targetPos.z ? 1.5 : -1.5)
       );
       if (bot.creative && typeof bot.creative.flyTo === 'function') {
-        try { await withTimeout(bot.creative.flyTo(stepBack), 600); } catch (e) {}
+        try { await withTimeout(bot.creative.flyTo(stepBack), 500); } catch (e) {}
       }
     }
 
@@ -282,7 +290,7 @@ class Builder {
     if (distToRef > 3.8) {
       const standPos = new Vec3(refPos.x + 1.2, refPos.y + 1.2, refPos.z + 1.2);
       if (bot.creative && typeof bot.creative.flyTo === 'function') {
-        try { await withTimeout(bot.creative.flyTo(standPos), 1000); } catch (e) {}
+        try { await withTimeout(bot.creative.flyTo(standPos), 800); } catch (e) {}
       } else {
         try {
           const { goals } = require('mineflayer-pathfinder');

@@ -11,6 +11,7 @@ const path = require('path');
 const fs = require('fs');
 const { pyramid, tower, dome } = require('./src/shapes');
 const { Builder } = require('./src/builder');
+const { SwarmManager } = require('./src/swarm');
 const { installChatCompat } = require('./src/chatCompat');
 const { parseLitematicBlocks, parseStructureNbtBlocks } = require('./src/schematic');
 
@@ -80,7 +81,8 @@ app.get('/api/status', (req, res) => {
     food: bot?.food ?? 20,
     position: pos ? { x: Math.round(pos.x), y: Math.round(pos.y), z: Math.round(pos.z) } : null,
     isBuilding: builder?.isBuilding() ?? false,
-    gameMode: bot?.game?.gameMode ?? 'unknown',
+    workers: swarm?.getWorkerCount() ?? 1,
+    gameMode: bot?.game?.gameMode ?? 'creative',
     logs,
   });
 });
@@ -123,10 +125,11 @@ async function loadSchematicBlocks(name, rotation = 0) {
 }
 
 // ---------------------------------------------------------------------------
-// Bot Lifecycle
+// Bot Lifecycle & Swarm Manager
 // ---------------------------------------------------------------------------
 let bot = null;
 let builder = null;
+let swarm = null;
 let reconnectTimer = null;
 
 function safeChat(msg) {
@@ -153,6 +156,7 @@ function createBot() {
   bot.loadPlugin(pathfinder);
   installChatCompat(bot);
   builder = new Builder(bot, { blockName: process.env.BUILD_BLOCK || 'cobblestone' });
+  swarm = new SwarmManager(bot, { host: VIAPROXY_HOST, port: VIAPROXY_PORT, version: BOT_PROTOCOL_VERSION });
 
   bot.once('spawn', () => {
     botStatus = 'connected';
@@ -164,14 +168,14 @@ function createBot() {
     // Enforce creative mode by default
     safeChat('/gamemode creative BuilderBot');
 
-    safeChat('[BuilderBot] Online! Use key B or: !schematic <name> [x y z] [rot], !pyramid, !dome, !tower, !come, !undo, !stop');
+    safeChat('[BuilderBot] Online! Use key B or: !schematic <name> [x y z] [rot], !swarm <count>, !pyramid, !dome, !tower, !come, !undo, !stop');
   });
 
   let lastCmdTime = 0;
   let lastCmdText = '';
 
   bot.on('chat', (username, message) => {
-    if (username === bot.username) return;
+    if (username.startsWith('BuilderBot')) return;
     const now = Date.now();
     const clean = message.trim();
     if (clean === lastCmdText && (now - lastCmdTime) < 1000) return;
@@ -181,7 +185,7 @@ function createBot() {
   });
 
   bot.on('whisper', (username, message) => {
-    if (username === bot.username) return;
+    if (username.startsWith('BuilderBot')) return;
     logSystem(`[Whisper from ${username}] ${message}`);
     const clean = message.trim().startsWith('!') ? message.trim() : '!' + message.trim();
     handleChatLine(username, clean);
@@ -264,6 +268,13 @@ function parseSchematicCommand(args) {
   let origin = null;
   const nameTokens = [...args];
 
+  // If starts with "swarm <count>"
+  let swarmCount = null;
+  if (nameTokens[0] === 'swarm' && /^\d+$/.test(nameTokens[1])) {
+    nameTokens.shift(); // remove "swarm"
+    swarmCount = parseInt(nameTokens.shift(), 10);
+  }
+
   if (nameTokens.length >= 4 &&
       /^-?\d+$/.test(nameTokens[nameTokens.length - 4]) &&
       /^-?\d+$/.test(nameTokens[nameTokens.length - 3]) &&
@@ -287,15 +298,21 @@ function parseSchematicCommand(args) {
   }
 
   const name = nameTokens.join(' ').trim();
-  return { name, coordInfo: { origin, rotation } };
+  return { name, coordInfo: { origin, rotation }, swarmCount };
 }
 
-function handleChatLine(username, text) {
+async function handleChatLine(username, text) {
   if (!text.startsWith('!')) return;
   const args = text.trim().slice(1).split(/\s+/);
   const cmd = args.shift().toLowerCase();
 
   switch (cmd) {
+    case 'swarm':
+      const count = parseInt(args[0], 10) || 3;
+      safeChat(`[Swarm] Setting workforce to ${count} builder bots...`);
+      const totalWorkers = await swarm.setWorkerCount(count);
+      safeChat(`[Swarm] Ready! Active workforce: ${totalWorkers} builder bots.`);
+      return;
     case 'pyramid':
       const pyrSize = parseInt(args[0], 10) || 5;
       return runBuild(username, pyramid(pyrSize), parseCoordsAndRotation(args.slice(1)), `Pyramid (${pyrSize}x${pyrSize})`);
@@ -312,6 +329,9 @@ function handleChatLine(username, text) {
       return runBuild(username, tower(sW, sH), parseCoordsAndRotation(args.slice(2)), `Staircase (w=${sW}, h=${sH})`);
     case 'schematic':
       const parsed = parseSchematicCommand(args);
+      if (parsed.swarmCount && parsed.swarmCount > 1) {
+        await swarm.setWorkerCount(parsed.swarmCount);
+      }
       return runSchematicBuild(username, parsed.name, parsed.coordInfo);
     case 'come':
       return comeToPlayer(username);
@@ -325,14 +345,15 @@ function handleChatLine(username, text) {
       const pos = bot.entity ? bot.entity.position : null;
       const posStr = pos ? `(${Math.round(pos.x)}, ${Math.round(pos.y)}, ${Math.round(pos.z)})` : 'unknown';
       const bStatus = builder.getStatus();
+      const workerCount = swarm.getWorkerCount();
       if (bStatus.active) {
-        safeChat(`[Status] Building: "${bStatus.name}" | ${bStatus.placed}/${bStatus.total} placed (${bStatus.left} left, ${bStatus.percent}%) | Pos: ${posStr}`);
+        safeChat(`[Status] Building: "${bStatus.name}" | ${bStatus.placed}/${bStatus.total} placed (${bStatus.left} left, ${bStatus.percent}%) | Workforce: ${workerCount} bots | Pos: ${posStr}`);
       } else {
-        safeChat(`[Status] Health: ${Math.round(bot.health || 20)}/20 | Mode: ${bot.game?.gameMode || 'creative'} | Building: Idle | Pos: ${posStr}`);
+        safeChat(`[Status] Health: ${Math.round(bot.health || 20)}/20 | Mode: ${bot.game?.gameMode || 'creative'} | Workforce: ${workerCount} bots | Building: Idle | Pos: ${posStr}`);
       }
       return;
     case 'help':
-      safeChat('[Commands] !schematic <name> [x y z] [rot], !pyramid <size>, !dome <r>, !tower <r> <h>, !status, !come, !undo, !stop');
+      safeChat('[Commands] !schematic <name> [x y z] [rot], !swarm <count>, !pyramid <size>, !dome <r>, !tower <r> <h>, !status, !come, !undo, !stop');
       return;
     default:
       return;
@@ -347,9 +368,8 @@ async function runBuild(requester, offsets, coordInfo = { origin: null, rotation
   safeChat('/gamemode creative BuilderBot');
   builder.setJob(shapeName);
   const origin = resolveOrigin(requester, coordInfo.origin);
-  builder.enqueue(offsets, origin);
-  safeChat(`[Builder] Building "${shapeName}" (${offsets.length} blocks) at ${origin.x} ${origin.y} ${origin.z}...`);
-  await executeBuild();
+  safeChat(`[Builder] Building "${shapeName}" (${offsets.length} blocks, workforce: ${swarm.getWorkerCount()} bots) at ${origin.x} ${origin.y} ${origin.z}...`);
+  await executeBuild(offsets, origin);
 }
 
 async function runSchematicBuild(requester, name, coordInfo = { origin: null, rotation: 0 }) {
@@ -382,18 +402,18 @@ async function runSchematicBuild(requester, name, coordInfo = { origin: null, ro
   safeChat('/gamemode creative BuilderBot');
   builder.setJob(name);
   const origin = resolveOrigin(requester, coordInfo.origin);
-  builder.enqueue(blocks, origin);
+  const workforce = swarm.getWorkerCount();
   safeChat(
-    `[Builder] Building "${name}" (${blocks.length} blocks, rot ${coordInfo.rotation}°) ` +
+    `[Builder] Building "${name}" (${blocks.length} blocks, rot ${coordInfo.rotation}°, workforce: ${workforce} bots) ` +
       `at ${origin.x} ${origin.y} ${origin.z}...`
   );
-  await executeBuild();
+  await executeBuild(blocks, origin);
 }
 
-async function executeBuild() {
+async function executeBuild(blocks, origin) {
   try {
     const jobName = builder.currentJob.name;
-    const result = await builder.run((placed, total, left, percent, done) => {
+    const result = await swarm.buildParallel(builder, blocks, origin, (placed, total, left, percent, done) => {
       if (done) {
         logSystem(`[Builder] Build complete: ${placed}/${total} placed.`);
       } else {
@@ -425,6 +445,7 @@ function stopBuild(requester) {
     safeChat(`Nothing in progress, ${requester}.`);
     return;
   }
+  swarm.cancelAll();
   builder.cancel();
   safeChat('[Stop] Build stopped immediately.');
 }
