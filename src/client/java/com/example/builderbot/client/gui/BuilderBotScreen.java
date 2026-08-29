@@ -47,6 +47,9 @@ public class BuilderBotScreen extends Screen {
     // Inputs & Widgets
     private EditBox searchBox;
     private EditBox structureInput;
+    private EditBox coordXBox;
+    private EditBox coordYBox;
+    private EditBox coordZBox;
     private final List<Button> tabButtons = new ArrayList<>();
     private final List<Button> activePageWidgets = new ArrayList<>();
     private Button approveDespawnThisBtn;
@@ -192,7 +195,7 @@ public class BuilderBotScreen extends Screen {
         ).bounds(listX + (listW / 2) + 2, listY + listH + 26, (listW / 2) - 2, 18).build();
         addPageWidget(refreshBtn);
 
-        // Right side: Hologram Preview, Rotation & Swarm Stepper
+        // Right side: Hologram Preview, Rotation, Coordinates & Swarm Stepper
         int rightX = winX + 212;
         int rightY = winY + 52;
         int rightW = winW - 226;
@@ -207,9 +210,37 @@ public class BuilderBotScreen extends Screen {
             Button rotBtn = Button.builder(
                     Component.literal(deg + "°").withStyle(selectedRotation == deg ? ChatFormatting.GOLD : ChatFormatting.WHITE),
                     btn -> { this.selectedRotation = deg; this.init(); }
-            ).bounds(rightX + (i * (rotW + 2)), rightY + 24, rotW, 18).build();
+            ).bounds(rightX + (i * (rotW + 2)), rightY + 22, rotW, 16).build();
             addPageWidget(rotBtn);
         }
+
+        // Coordinates Inputs (X, Y, Z)
+        int boxW = (rightW - 6) / 3;
+        this.coordXBox = new EditBox(this.font, rightX, rightY + 42, boxW, 16, Component.literal("X"));
+        this.coordXBox.setHint(Component.literal("X").withStyle(ChatFormatting.DARK_GRAY));
+        this.addRenderableWidget(coordXBox);
+
+        this.coordYBox = new EditBox(this.font, rightX + boxW + 3, rightY + 42, boxW, 16, Component.literal("Y"));
+        this.coordYBox.setHint(Component.literal("Y").withStyle(ChatFormatting.DARK_GRAY));
+        this.addRenderableWidget(coordYBox);
+
+        this.coordZBox = new EditBox(this.font, rightX + (boxW * 2) + 6, rightY + 42, boxW, 16, Component.literal("Z"));
+        this.coordZBox.setHint(Component.literal("Z").withStyle(ChatFormatting.DARK_GRAY));
+        this.addRenderableWidget(coordZBox);
+
+        // Quick Position Fill Buttons: [ 📍 My Pos ] [ 🤖 Bot Pos ]
+        int posBtnW = (rightW - 4) / 2;
+        Button myPosBtn = Button.builder(
+                Component.literal("📍 My Pos").withStyle(ChatFormatting.AQUA),
+                btn -> fillMyPosition()
+        ).bounds(rightX, rightY + 62, posBtnW, 18).build();
+        addPageWidget(myPosBtn);
+
+        Button botPosBtn = Button.builder(
+                Component.literal("🤖 Bot Pos").withStyle(ChatFormatting.YELLOW),
+                btn -> fillBotPosition()
+        ).bounds(rightX + posBtnW + 4, rightY + 62, posBtnW, 18).build();
+        addPageWidget(botPosBtn);
 
         // 3D Block-by-Block Ghost Preview In World Button
         boolean hasGhost = com.example.builderbot.client.render.ClientGhostRenderer.hasActiveGhost();
@@ -220,19 +251,55 @@ public class BuilderBotScreen extends Screen {
         Button previewBtn = Button.builder(
                 previewLabel,
                 btn -> onPreviewSchematic()
-        ).bounds(rightX, rightY + 46, rightW, 20).build();
+        ).bounds(rightX, rightY + 84, rightW, 18).build();
         addPageWidget(previewBtn);
 
         // Manual build input box
-        this.structureInput = new EditBox(this.font, rightX, rightY + 70, rightW - 46, 18, Component.literal("ID"));
+        this.structureInput = new EditBox(this.font, rightX, rightY + 106, rightW - 46, 18, Component.literal("ID"));
         this.structureInput.setHint(Component.literal("Structure ID...").withStyle(ChatFormatting.DARK_GRAY));
         this.addRenderableWidget(structureInput);
 
         Button manualBuildBtn = Button.builder(
                 Component.literal("Build").withStyle(ChatFormatting.GREEN),
                 btn -> onManualBuild()
-        ).bounds(rightX + rightW - 42, rightY + 70, 42, 18).build();
+        ).bounds(rightX + rightW - 42, rightY + 106, 42, 18).build();
         addPageWidget(manualBuildBtn);
+    }
+
+    private void fillMyPosition() {
+        if (Minecraft.getInstance().player != null) {
+            BlockPos pos = Minecraft.getInstance().player.blockPosition();
+            if (coordXBox != null) coordXBox.setValue(String.valueOf(pos.getX()));
+            if (coordYBox != null) coordYBox.setValue(String.valueOf(pos.getY()));
+            if (coordZBox != null) coordZBox.setValue(String.valueOf(pos.getZ()));
+        }
+    }
+
+    private void fillBotPosition() {
+        if (Minecraft.getInstance().level != null && Minecraft.getInstance().player != null) {
+            var botEntity = Minecraft.getInstance().level.players().stream()
+                    .filter(p -> p.getName().getString().toLowerCase().contains("builderbot"))
+                    .findFirst();
+            if (botEntity.isPresent()) {
+                BlockPos pos = botEntity.get().blockPosition();
+                if (coordXBox != null) coordXBox.setValue(String.valueOf(pos.getX()));
+                if (coordYBox != null) coordYBox.setValue(String.valueOf(pos.getY()));
+                if (coordZBox != null) coordZBox.setValue(String.valueOf(pos.getZ()));
+            } else {
+                fillMyPosition();
+            }
+        }
+    }
+
+    private String buildCoordArgsString() {
+        if (coordXBox == null || coordYBox == null || coordZBox == null) return " " + selectedRotation;
+        String x = coordXBox.getValue().trim();
+        String y = coordYBox.getValue().trim();
+        String z = coordZBox.getValue().trim();
+        if (x.isEmpty() || y.isEmpty() || z.isEmpty()) {
+            return selectedRotation > 0 ? " " + selectedRotation : "";
+        }
+        return " " + x + " " + y + " " + z + " " + selectedRotation;
     }
 
     // ── TAB 1: PROCEDURAL SHAPES GENERATOR ───────────────────────────────────
@@ -470,7 +537,8 @@ public class BuilderBotScreen extends Screen {
         com.example.builderbot.client.render.ClientGhostRenderer.clearGhostSchematic();
         if (selectedSchematicIndex >= 0 && selectedSchematicIndex < filteredSchematicFiles.size()) {
             File selected = filteredSchematicFiles.get(selectedSchematicIndex);
-            runCommand("builderbot swarm " + selectedBotCount + " schematic " + selected.getName());
+            String coordArgs = buildCoordArgsString();
+            runCommand("builderbot swarm " + selectedBotCount + " schematic " + selected.getName() + coordArgs);
             this.onClose();
         }
     }

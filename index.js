@@ -1,424 +1,187 @@
 'use strict';
 
-// ---------------------------------------------------------------------------
-// Protocol & Chat Compatibility Patches for 1.21+ / ViaProxy structured chat
-// ---------------------------------------------------------------------------
-const fs = require('fs');
-const path = require('path');
-
-// Auto-patch minecraft-protocol chat.js and mineflayer chat.js if present on disk
-try {
-  const chatJsPath = path.join(__dirname, 'node_modules', 'minecraft-protocol', 'src', 'client', 'chat.js');
-  if (fs.existsSync(chatJsPath)) {
-    let content = fs.readFileSync(chatJsPath, 'utf8');
-    if (content.includes('processNbtMessage(msg)')) {
-      content = content.replace(
-        /processNbtMessage\(msg\)/g,
-        "(function(m){ try { const pnbt = require('prismarine-nbt'); return pnbt.simplify(m); } catch (e) { return m; } })(msg)"
-      );
-      fs.writeFileSync(chatJsPath, content, 'utf8');
-    }
-  }
-
-  const mfChatPath = path.join(__dirname, 'node_modules', 'mineflayer', 'lib', 'plugins', 'chat.js');
-  if (fs.existsSync(mfChatPath)) {
-    let content = fs.readFileSync(mfChatPath, 'utf8');
-    if (!content.includes('typeof msg === "object"')) {
-      content = content.replace(
-        /JSON\.parse\(([^)]+)\)/g,
-        '(typeof $1 === "object" ? $1 : (function(x){ try { return JSON.parse(x); } catch(e){ return { text: String(x || "") }; } })($1))'
-      );
-      fs.writeFileSync(mfChatPath, content, 'utf8');
-    }
-  }
-} catch (e) {}
-
-// Global NBT Message processor fallback
-try {
-  const pnbt = require('prismarine-nbt');
-  global.processNbtMessage = (msg) => (msg ? pnbt.simplify(msg) : msg);
-} catch (e) {
-  global.processNbtMessage = (msg) => msg;
-}
-
-const Module = require('module');
-const originalRequire = Module.prototype.require;
-
-Module.prototype.require = function (id) {
-  const exports = originalRequire.apply(this, arguments);
-
-  // Patch prismarine-chat format codes
-  if (id === 'prismarine-chat' || id.endsWith('/prismarine-chat') || id.endsWith('\\prismarine-chat')) {
-    if (typeof exports === 'function') {
-      const originalFactory = exports;
-      return function (registry) {
-        const ChatMessage = originalFactory(registry);
-        if (ChatMessage && typeof ChatMessage.fromNetwork === 'function') {
-          const originalFromNetwork = ChatMessage.fromNetwork;
-          ChatMessage.fromNetwork = function (type, message, ...args) {
-            try {
-              if (typeof type === 'object' && type !== null) {
-                type = type.type ?? type.id ?? type.name ?? 0;
-              }
-              return originalFromNetwork.call(this, type, message, ...args);
-            } catch (err) {
-              try {
-                const text = (typeof message === 'object' ? (message.text || JSON.stringify(message)) : String(message || ''));
-                return new ChatMessage(text);
-              } catch (e) {
-                return new ChatMessage('');
-              }
-            }
-          };
-        }
-        return ChatMessage;
-      };
-    }
-  }
-
-  return exports;
-};
-
-// Prevent protocol / chat parsing hiccups from terminating the process
-process.on('uncaughtException', (err) => {
-  if (err && err.message) {
-    if (
-      err.message.includes('unknown chat format code') ||
-      err.message.includes('processNbtMessage') ||
-      err.message.includes('write EPIPE') ||
-      err.message.includes('ECONNRESET')
-    ) {
-      console.warn(`[Protocol Patch] Handled non-fatal network/chat exception: ${err.message}`);
-      return;
-    }
-  }
-  console.error('[Uncaught Exception]', err);
-});
-
 const express = require('express');
+const multer = require('multer');
 const mineflayer = require('mineflayer');
 const { pathfinder, Movements, goals } = require('mineflayer-pathfinder');
 const { Vec3 } = require('vec3');
+const nbt = require('prismarine-nbt');
+const zlib = require('zlib');
+const path = require('path');
+const fs = require('fs');
 const { pyramid, tower, dome } = require('./src/shapes');
 const { Builder } = require('./src/builder');
+const { installChatCompat } = require('./src/chatCompat');
+const { parseLitematicBlocks, parseStructureNbtBlocks } = require('./src/schematic');
 
 // ---------------------------------------------------------------------------
-// Configuration & Environment Settings
+// Configuration
 // ---------------------------------------------------------------------------
-const REAL_SERVER_HOST = process.env.MC_HOST || process.env.SERVER_HOST || 'localhost';
-const REAL_SERVER_PORT = process.env.MC_PORT || process.env.SERVER_PORT || '25565';
+const REAL_SERVER_HOST = process.env.MC_HOST || 'akshat980jain-llhY.aternos.me';
+const REAL_SERVER_PORT = process.env.MC_PORT || '30929';
 const REAL_SERVER_VERSION = process.env.MC_VERSION || '26.2';
 
 const VIAPROXY_HOST = '127.0.0.1';
 const VIAPROXY_PORT = process.env.VIAPROXY_PORT || '25577';
-
 const BOT_PROTOCOL_VERSION = process.env.BOT_PROTOCOL_VERSION || '1.21.4';
-const BOT_USERNAME = process.env.BOT_USERNAME || process.env.BOT_NAME || 'BuilderBot';
-const BOT_PASSWORD = process.env.BOT_PASSWORD || process.env.AUTH_PASSWORD || '';
-const HTTP_PORT = process.env.PORT || 3000;
 
-// Logging buffer for the Web Console
-const webLogs = [];
-function logSystem(msg) {
-  const timestamp = new Date().toLocaleTimeString();
-  const entry = `[${timestamp}] ${msg}`;
-  console.log(entry);
-  webLogs.push(entry);
-  if (webLogs.length > 80) webLogs.shift();
-}
+const BOT_USERNAME = process.env.BOT_USERNAME || 'BuilderBot';
+const RECONNECT_DELAY_MS = 10_000;
+const DUPLICATE_LOGIN_RECONNECT_DELAY_MS = 18_000;
+const HTTP_PORT = process.env.PORT || 8080;
 
 // ---------------------------------------------------------------------------
-// Express Keep-Alive & Interactive Web Command Center
+// Express keep-alive & Schematic Upload Server
 // ---------------------------------------------------------------------------
 const app = express();
-app.use(express.json());
+let botStatus = 'starting';
+const logs = [];
 
-let bot = null;
-let builder = null;
-let reconnectTimer = null;
-let botStatus = 'Starting ViaProxy & Bot...';
-let reconnectAttempts = 0;
+function logSystem(msg) {
+  const time = new Date().toLocaleTimeString();
+  const entry = `[${time}] ${msg}`;
+  logs.push(entry);
+  if (logs.length > 200) logs.shift();
+  console.log(entry);
+}
+
+const SCHEMATICS_DIR = process.env.SCHEMATICS_DIR || path.join(__dirname, 'schematics');
+fs.mkdirSync(SCHEMATICS_DIR, { recursive: true });
+
+const upload = multer({
+  storage: multer.diskStorage({
+    destination: SCHEMATICS_DIR,
+    filename: (req, file, cb) => cb(null, path.basename(file.originalname)),
+  }),
+  limits: { fileSize: 50 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const ok = /\.(litematic|nbt|schem|schematic)$/i.test(file.originalname);
+    cb(ok ? null : new Error('Only .litematic and .nbt files are accepted'), ok);
+  },
+});
+
+app.post('/schematics/upload', upload.single('schematic'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file received (field name must be "schematic")' });
+  logSystem(`[Schematics] Received upload: ${req.file.originalname} (${req.file.size} bytes)`);
+  res.json({ ok: true, name: req.file.originalname });
+});
+
+app.get('/schematics', (req, res) => {
+  const files = fs.readdirSync(SCHEMATICS_DIR).filter((f) => /\.(litematic|nbt|schem|schematic)$/i.test(f));
+  res.json({ files });
+});
 
 app.get('/api/status', (req, res) => {
-  const pos = bot && bot.entity ? bot.entity.position : null;
+  const pos = bot?.entity ? bot.entity.position : null;
   res.json({
     status: botStatus,
     username: BOT_USERNAME,
-    target: `${REAL_SERVER_HOST}:${REAL_SERVER_PORT}`,
-    version: REAL_SERVER_VERSION,
-    health: bot ? Math.round(bot.health || 20) : 0,
-    food: bot ? Math.round(bot.food || 20) : 0,
+    health: bot?.health ?? 20,
+    food: bot?.food ?? 20,
     position: pos ? { x: Math.round(pos.x), y: Math.round(pos.y), z: Math.round(pos.z) } : null,
-    logs: webLogs
+    isBuilding: builder?.isBuilding() ?? false,
+    gameMode: bot?.game?.gameMode ?? 'unknown',
+    logs,
   });
-});
-
-app.post('/api/command', (req, res) => {
-  const cmd = (req.body.command || '').trim();
-  if (!cmd) return res.json({ success: false, msg: 'Empty command.' });
-
-  logSystem(`[Web Console] > ${cmd}`);
-
-  if (cmd.startsWith('!')) {
-    handleCommandArgs('WebAdmin', cmd);
-    return res.json({ success: true, msg: `Executed build command: ${cmd}` });
-  }
-
-  if (cmd.startsWith('/')) {
-    safeChat(cmd);
-    return res.json({ success: true, msg: `Sent server command: ${cmd}` });
-  }
-
-  safeChat(cmd);
-  return res.json({ success: true, msg: `Sent chat: ${cmd}` });
 });
 
 app.get('/', (req, res) => {
-  res.send(`
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>BuilderBot - 24/7 Command Center</title>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Outfit', sans-serif; }
-        body { background: #090d16; color: #f1f5f9; display: flex; justify-content: center; align-items: center; min-height: 100vh; padding: 16px; }
-        .dashboard { width: 100%; max-width: 680px; background: #111827; border: 1px solid #1f2937; border-radius: 20px; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7); overflow: hidden; }
-        .header { background: linear-gradient(135deg, #1e1b4b 0%, #1e293b 100%); padding: 24px; border-bottom: 1px solid #334155; display: flex; justify-content: space-between; align-items: center; }
-        .title-group h1 { font-size: 22px; font-weight: 800; color: #fbbf24; display: flex; align-items: center; gap: 8px; }
-        .title-group p { font-size: 13px; color: #94a3b8; margin-top: 4px; }
-        .badge { padding: 6px 14px; border-radius: 9999px; font-size: 12px; font-weight: 700; background: #059669; color: #fff; letter-spacing: 0.5px; }
-        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; padding: 20px; background: #0f172a; border-bottom: 1px solid #1f2937; }
-        .card { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 14px; text-align: center; }
-        .card-label { font-size: 11px; font-weight: 600; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px; }
-        .card-val { font-size: 16px; font-weight: 700; color: #38bdf8; margin-top: 4px; }
-        .console-section { padding: 20px; }
-        .console-header { font-size: 13px; font-weight: 700; color: #cbd5e1; margin-bottom: 10px; display: flex; justify-content: space-between; }
-        .terminal { background: #030712; border: 1px solid #1f2937; border-radius: 12px; height: 220px; padding: 14px; font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #a5f3fc; overflow-y: auto; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }
-        .command-bar { display: flex; gap: 8px; margin-top: 14px; }
-        .cmd-input { flex: 1; background: #030712; border: 1px solid #334155; border-radius: 10px; padding: 12px 16px; color: #f8fafc; font-family: 'JetBrains Mono', monospace; font-size: 13px; outline: none; transition: border-color 0.2s; }
-        .cmd-input:focus { border-color: #38bdf8; }
-        .send-btn { background: #2563eb; color: #fff; border: none; border-radius: 10px; padding: 0 20px; font-weight: 700; font-size: 14px; cursor: pointer; transition: background 0.2s; }
-        .send-btn:hover { background: #1d4ed8; }
-        .quick-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
-        .quick-btn { background: #1e293b; border: 1px solid #334155; color: #cbd5e1; border-radius: 8px; padding: 6px 12px; font-size: 12px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
-        .quick-btn:hover { background: #334155; color: #38bdf8; }
-    </style>
-</head>
-<body>
-    <div class="dashboard">
-        <div class="header">
-            <div class="title-group">
-                <h1>🤖 BuilderBot 24/7</h1>
-                <p>Autonomous Builder & AFK Server Keeper (Protocol 776 / 26.2)</p>
-            </div>
-            <div id="statusBadge" class="badge">Starting...</div>
-        </div>
-
-        <div class="grid">
-            <div class="card">
-                <div class="card-label">Target Server</div>
-                <div id="targetServer" class="card-val">${REAL_SERVER_HOST}:${REAL_SERVER_PORT}</div>
-            </div>
-            <div class="card">
-                <div class="card-label">Health / Food</div>
-                <div id="healthFood" class="card-val">20 ❤️ | 20 🍗</div>
-            </div>
-            <div class="card">
-                <div class="card-label">Coordinates</div>
-                <div id="coords" class="card-val">~, ~, ~</div>
-            </div>
-        </div>
-
-        <div class="console-section">
-            <div class="console-header">
-                <span>Live Bot Console & Log Feed</span>
-                <span style="color:#64748b; font-size:11px;">Auto-Refreshing</span>
-            </div>
-            <div id="terminal" class="terminal">Connecting to log stream...</div>
-
-            <div class="command-bar">
-                <input id="cmdInput" class="cmd-input" type="text" placeholder="Type !pyramid 8, !dome 6, !come, /say hello, or server commands..." onkeydown="if(event.key==='Enter') sendCmd()">
-                <button class="send-btn" onclick="sendCmd()">Send</button>
-            </div>
-
-            <div class="quick-actions">
-                <button class="quick-btn" onclick="sendQuick('!come')">🏃 !come</button>
-                <button class="quick-btn" onclick="sendQuick('!pyramid 5')">🔺 !pyramid 5</button>
-                <button class="quick-btn" onclick="sendQuick('!dome 6')">🌐 !dome 6</button>
-                <button class="quick-btn" onclick="sendQuick('!tower 3 10')">🗼 !tower 3 10</button>
-                <button class="quick-btn" onclick="sendQuick('!undo')">⏪ !undo</button>
-                <button class="quick-btn" onclick="sendQuick('!stop')">⏹ !stop</button>
-            </div>
-        </div>
-    </div>
-
-    <script>
-        async function fetchStatus() {
-            try {
-                const res = await fetch('/api/status');
-                const data = await res.json();
-                
-                const badge = document.getElementById('statusBadge');
-                badge.innerText = data.status;
-                badge.style.background = (data.status.includes('Online') || data.status.includes('World')) ? '#059669' : '#dc2626';
-
-                document.getElementById('healthFood').innerText = (data.health || 20) + ' ❤️ | ' + (data.food || 20) + ' 🍗';
-                document.getElementById('coords').innerText = data.position ? (data.position.x + ', ' + data.position.y + ', ' + data.position.z) : 'Connecting...';
-
-                const term = document.getElementById('terminal');
-                term.innerText = (data.logs || []).join('\\n');
-                term.scrollTop = term.scrollHeight;
-            } catch (e) {}
-        }
-
-        async function sendCmd() {
-            const input = document.getElementById('cmdInput');
-            const command = input.value.trim();
-            if (!command) return;
-            input.value = '';
-
-            await fetch('/api/command', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ command })
-            });
-            fetchStatus();
-        }
-
-        function sendQuick(cmd) {
-            document.getElementById('cmdInput').value = cmd;
-            sendCmd();
-        }
-
-        setInterval(fetchStatus, 2500);
-        fetchStatus();
-    </script>
-</body>
-</html>
-  `);
+  res.json({ status: botStatus, username: BOT_USERNAME, uptime: process.uptime() });
 });
 
 app.listen(HTTP_PORT, () => {
-  logSystem(`[HTTP] Keep-Alive & Command Center listening on :${HTTP_PORT}`);
+  logSystem(`[HTTP] Keep-alive and upload server listening on :${HTTP_PORT}`);
 });
 
 // ---------------------------------------------------------------------------
-// Bot Lifecycle & Survival Automation
+// Schematic Loader
 // ---------------------------------------------------------------------------
+async function loadSchematicBlocks(name, rotation = 0) {
+  const cleanName = name.replace(/[\s._-]+/g, '').toLowerCase();
+  const files = fs.readdirSync(SCHEMATICS_DIR);
+
+  let match = files.find(f => f.toLowerCase() === name.toLowerCase());
+  if (!match) {
+    match = files.find(f => {
+      const c = f.replace(/[\s._-]+/g, '').toLowerCase();
+      return c.includes(cleanName) || cleanName.includes(c);
+    });
+  }
+
+  if (!match) return null;
+  const filePath = path.join(SCHEMATICS_DIR, match);
+
+  const raw = fs.readFileSync(filePath);
+  const decompressed = raw[0] === 0x1f && raw[1] === 0x8b ? zlib.gunzipSync(raw) : raw;
+  const { parsed } = await nbt.parse(decompressed);
+  const simplified = nbt.simplify(parsed);
+
+  if (filePath.endsWith('.litematic')) {
+    return parseLitematicBlocks(simplified, rotation);
+  }
+  return parseStructureNbtBlocks(simplified, rotation);
+}
+
+// ---------------------------------------------------------------------------
+// Bot Lifecycle
+// ---------------------------------------------------------------------------
+let bot = null;
+let builder = null;
+let reconnectTimer = null;
+
 function safeChat(msg) {
-  if (!bot) return;
-  try {
-    bot.chat(msg);
-  } catch (e) {
-    logSystem(`[Bot Chat Notice] ${e.message}`);
-  }
-}
-
-// Auto-Eat System (From SoloPlayz)
-function handleAutoEat() {
-  if (!bot || bot.food >= 16) return;
-  const foodItem = bot.inventory.items().find(i => 
-    i.name.includes('bread') || i.name.includes('apple') || i.name.includes('cooked') || 
-    i.name.includes('steak') || i.name.includes('porkchop') || i.name.includes('carrot') || i.name.includes('baked_potato')
-  );
-  if (foodItem) {
-    bot.equip(foodItem, 'hand').then(() => {
-      bot.consume().then(() => {
-        logSystem(`[Survival] Bot auto-consumed ${foodItem.name} (Food: ${bot.food}/20)`);
-      }).catch(() => {});
-    }).catch(() => {});
-  }
-}
-
-// Hostile Mob Defense System (From SoloPlayz)
-function handleMobDefense() {
-  if (!bot || !bot.entity || (builder && builder.isBuilding())) return;
-  const hostile = bot.nearestEntity(e => {
-    if (!e || e.type !== 'mob') return false;
-    const name = (e.name || '').toLowerCase();
-    return name.includes('zombie') || name.includes('skeleton') || name.includes('spider') || name.includes('creeper');
-  });
-
-  if (hostile && hostile.position.distanceTo(bot.entity.position) < 3.5) {
-    const weapon = bot.inventory.items().find(i => i.name.includes('sword') || i.name.includes('axe'));
-    if (weapon) bot.equip(weapon, 'hand').catch(() => {});
-    bot.attack(hostile);
-    logSystem(`[Defense] Attacked nearby hostile mob: ${hostile.name}`);
+  if (bot && bot.entity && typeof bot.chat === 'function') {
+    const clean = String(msg || '').replace(/[^\x20-\x7E]/g, '');
+    bot.chat(clean);
   }
 }
 
 function createBot() {
-  logSystem(`[Bot] Connecting to ViaProxy at ${VIAPROXY_HOST}:${VIAPROXY_PORT} -> Real Server ${REAL_SERVER_HOST}:${REAL_SERVER_PORT} (v${REAL_SERVER_VERSION})...`);
-  botStatus = `Connecting via ViaProxy to ${REAL_SERVER_HOST}:${REAL_SERVER_PORT}...`;
+  logSystem(
+    `[Bot] Connecting to ViaProxy at ${VIAPROXY_HOST}:${VIAPROXY_PORT} ` +
+      `-> ${REAL_SERVER_HOST}:${REAL_SERVER_PORT} (v${REAL_SERVER_VERSION})...`
+  );
 
   bot = mineflayer.createBot({
     host: VIAPROXY_HOST,
     port: Number(VIAPROXY_PORT),
     username: BOT_USERNAME,
     version: BOT_PROTOCOL_VERSION,
-    auth: process.env.MC_AUTH || 'offline',
-    checkTimeoutInterval: 120000,
-    keepAlive: true,
-    hideErrors: true
+    auth: 'offline',
   });
 
   bot.loadPlugin(pathfinder);
+  installChatCompat(bot);
   builder = new Builder(bot, { blockName: process.env.BUILD_BLOCK || 'cobblestone' });
 
   bot.once('spawn', () => {
-    botStatus = 'Online (In World)';
-    reconnectAttempts = 0;
-    logSystem('[Bot] 🎉 Spawned successfully in Minecraft 26.2 world!');
+    botStatus = 'connected';
+    logSystem(`[Bot] Spawned successfully in Minecraft world!`);
 
     const defaultMove = new Movements(bot);
     bot.pathfinder.setMovements(defaultMove);
 
-    // Auto-Auth Login Support (From SoloPlayz)
-    if (BOT_PASSWORD) {
-      setTimeout(() => {
-        safeChat(`/login ${BOT_PASSWORD}`);
-        safeChat(`/register ${BOT_PASSWORD} ${BOT_PASSWORD}`);
-        logSystem('[Auth] Auto-login credentials sent.');
-      }, 1000);
-    }
-
-    setTimeout(() => {
-      safeChat(`[BuilderBot] ${BOT_USERNAME} online in 26.2! Commands: !pyramid <size>, !dome <r>, !tower <r> <h>, !come, !undo, !stop`);
-    }, 2000);
+    safeChat('[BuilderBot] Online! Use key B or: !schematic <name> [x y z] [rot], !pyramid, !dome, !tower, !come, !undo, !stop');
   });
 
-  // Survival Interval Hooks
-  bot.on('health', () => {
-    handleAutoEat();
-  });
-
-  const defenseInterval = setInterval(() => {
-    if (bot && bot.entity) handleMobDefense();
-  }, 1500);
-
-  let lastCommandTime = 0;
-  let lastCommandText = '';
+  let lastCmdTime = 0;
+  let lastCmdText = '';
 
   bot.on('chat', (username, message) => {
     if (username === bot.username) return;
     const now = Date.now();
-    const cleanMsg = message.trim();
-    if (cleanMsg === lastCommandText && (now - lastCommandTime) < 1000) {
-      return; // Skip duplicate command within 1 second
-    }
-    lastCommandTime = now;
-    lastCommandText = cleanMsg;
-    handleCommandArgs(username, cleanMsg);
+    const clean = message.trim();
+    if (clean === lastCmdText && (now - lastCmdTime) < 1000) return;
+    lastCmdTime = now;
+    lastCmdText = clean;
+    handleChatLine(username, clean);
   });
 
   bot.on('whisper', (username, message) => {
     if (username === bot.username) return;
     logSystem(`[Whisper from ${username}] ${message}`);
-    const cleanMsg = message.trim().startsWith('!') ? message.trim() : '!' + message.trim();
-    handleCommandArgs(username, cleanMsg);
+    const clean = message.trim().startsWith('!') ? message.trim() : '!' + message.trim();
+    handleChatLine(username, clean);
   });
 
   bot.on('builder_place_error', (pos, err) => {
@@ -430,11 +193,10 @@ function createBot() {
   });
 
   bot.on('kicked', (reason) => {
-    const reasonStr = typeof reason === 'object' ? JSON.stringify(reason) : String(reason);
+    const reasonStr = describeDisconnectReason(reason);
     logSystem(`[Bot Kicked] ${reasonStr}`);
     botStatus = `Kicked: ${reasonStr}`;
-    clearInterval(defenseInterval);
-    scheduleReconnect('kicked');
+    scheduleReconnect(RECONNECT_DELAY_MS);
   });
 
   bot.on('error', (err) => {
@@ -442,154 +204,162 @@ function createBot() {
   });
 
   bot.on('end', (reason) => {
-    botStatus = 'Disconnected. Retrying...';
-    logSystem(`[Bot Disconnected] Reason: ${reason}. Scheduling smart reconnect...`);
-    clearInterval(defenseInterval);
-    scheduleReconnect('end');
+    botStatus = 'disconnected';
+    const desc = describeDisconnectReason(reason);
+    const delay = desc.toLowerCase().includes('duplicate_login')
+      ? DUPLICATE_LOGIN_RECONNECT_DELAY_MS
+      : RECONNECT_DELAY_MS;
+    logSystem(`[Bot Disconnected] Reason: ${desc}. Reconnecting in ${delay / 1000}s...`);
+    scheduleReconnect(delay);
   });
 }
 
-// Anti-Throttle Smart Reconnect (From SoloPlayz)
-function scheduleReconnect(reason) {
-  if (reconnectTimer) return;
-  reconnectAttempts++;
-
-  // Fast reconnect 8-15s, exponential backoff if throttled
-  let delay = 10000;
-  if (String(reason).includes('duplicate_login') || botStatus.includes('duplicate_login')) {
-    delay = 15000;
+function describeDisconnectReason(reason) {
+  if (!reason) return 'unknown';
+  if (typeof reason === 'string') {
+    try {
+      const p = JSON.parse(reason);
+      return p.text || p.translate || reason;
+    } catch {
+      return reason;
+    }
   }
-  if (reconnectAttempts > 3) delay = 20000;
-  if (reconnectAttempts > 6) delay = 35000;
+  if (typeof reason === 'object') return reason.text || reason.translate || JSON.stringify(reason);
+  return String(reason);
+}
 
-  logSystem(`[Reconnect] Attempt ${reconnectAttempts} in ${Math.round(delay / 1000)}s (Trigger: ${reason})`);
+function scheduleReconnect(delayMs) {
+  if (reconnectTimer) return;
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
     createBot();
-  }, delay);
+  }, delayMs);
 }
 
 // ---------------------------------------------------------------------------
-// Chat & Construction Command Processing
+// Command Handling
 // ---------------------------------------------------------------------------
-const CHAT_LINE_RE = /^<([^>]+)>\s*(.+)$/;
+const VALID_ROTATIONS = new Set(['0', '90', '180', '270']);
 
-function handleChatCommand(message) {
-  const clean = message.trim();
-  logSystem(`[Chat] ${clean}`);
-
-  const match = clean.match(CHAT_LINE_RE);
-  if (match) {
-    const [, username, text] = match;
-    if (username !== bot.username) {
-      handleCommandArgs(username, text);
-    }
-    return;
+function parseCoordsAndRotation(args) {
+  if (args.length >= 3 && args.slice(0, 3).every((a) => /^-?\d+$/.test(a))) {
+    const [x, y, z] = args.slice(0, 3).map(Number);
+    const rotation = args[3] && VALID_ROTATIONS.has(args[3]) ? parseInt(args[3], 10) : 0;
+    return { origin: new Vec3(x, y, z), rotation };
   }
-
-  // Handle whisper formats: "Player whispers to you: command" or "[Player -> you] command"
-  const whisperMatch = clean.match(/^([a-zA-Z0-9_]+)\s+(?:whispers to you|whispers):\s*(.+)$/i) || clean.match(/^\[([a-zA-Z0-9_]+)\s*->\s*(?:you|BuilderBot)\]\s*(.+)$/i);
-  if (whisperMatch) {
-    const [, username, text] = whisperMatch;
-    const cmdText = text.trim().startsWith('!') ? text.trim() : '!' + text.trim();
-    handleCommandArgs(username, cmdText);
-    return;
-  }
-
-  if (clean.includes('!')) {
-    const cmdIndex = clean.indexOf('!');
-    const commandText = clean.substring(cmdIndex);
-    handleCommandArgs('player', commandText);
-  }
+  return { origin: null, rotation: 0 };
 }
 
-function handleCommandArgs(username, text) {
+function resolveOrigin(requester, explicitOrigin) {
+  if (explicitOrigin) return explicitOrigin;
+  const player = bot.players[requester]?.entity;
+  return player ? player.position.floored() : (bot.entity ? bot.entity.position.floored() : new Vec3(0, 64, 0));
+}
+
+function handleChatLine(username, text) {
   if (!text.startsWith('!')) return;
-
   const args = text.trim().slice(1).split(/\s+/);
   const cmd = args.shift().toLowerCase();
 
   switch (cmd) {
     case 'pyramid':
-      return runBuild(username, pyramid(parseInt(args[0], 10) || 5));
+      return runBuild(username, pyramid(parseInt(args[0], 10) || 5), parseCoordsAndRotation(args.slice(1)));
     case 'dome':
-      return runBuild(username, dome(parseInt(args[0], 10) || 6));
+      return runBuild(username, dome(parseInt(args[0], 10) || 6), parseCoordsAndRotation(args.slice(1)));
     case 'tower':
-      return runBuild(username, tower(parseInt(args[0], 10) || 2, parseInt(args[1], 10) || 10));
+      return runBuild(
+        username,
+        tower(parseInt(args[0], 10) || 2, parseInt(args[1], 10) || 10),
+        parseCoordsAndRotation(args.slice(2))
+      );
+    case 'stairs':
+      return runBuild(
+        username,
+        tower(parseInt(args[0], 10) || 3, parseInt(args[1], 10) || 12),
+        parseCoordsAndRotation(args.slice(2))
+      );
+    case 'schematic':
+      return runSchematicBuild(username, args[0], parseCoordsAndRotation(args.slice(1)));
     case 'come':
       return comeToPlayer(username);
     case 'undo':
       return runUndo(username);
     case 'stop':
       return stopBuild(username);
-    case 'stairs':
-      return runBuild(username, tower(parseInt(args[0], 10) || 3, parseInt(args[1], 10) || 12));
-    case 'schematic':
-      const schemName = args.join(' ');
-      safeChat(`[Builder] Loading schematic "${schemName}"...`);
-      try {
-        const { loadSchematic } = require('./src/schematic');
-        loadSchematic(schemName).then(offsets => {
-          if (offsets && offsets.length > 0) {
-            safeChat(`[Builder] Loaded ${offsets.length} blocks from "${schemName}"!`);
-            runBuild(username, offsets);
-          } else {
-            safeChat(`[Builder Error] Schematic contains 0 non-air blocks.`);
-          }
-        }).catch(err => {
-          safeChat(`[Builder Error] ${err.message}`);
-          logSystem(`[Schematic Error] ${err.message}`);
-        });
-      } catch (e) {
-        safeChat(`[Builder Error] ${e.message}`);
-      }
-      return;
-    case 'help':
-      safeChat(`[BuilderBot Commands] !pyramid <size>, !dome <r>, !tower <r> <h>, !stairs, !come, !undo, !stop`);
-      return;
     case 'status':
       const pos = bot.entity ? bot.entity.position : null;
       const posStr = pos ? `(${Math.round(pos.x)}, ${Math.round(pos.y)}, ${Math.round(pos.z)})` : 'unknown';
-      safeChat(`[Status] Health: ${Math.round(bot.health || 20)}/20 | Position: ${posStr} | Building: ${builder.isBuilding() ? 'Active' : 'Idle'}`);
+      safeChat(`[Status] Health: ${Math.round(bot.health || 20)}/20 | Mode: ${bot.game?.gameMode || 'survival'} | Pos: ${posStr} | Building: ${builder.isBuilding() ? 'Active' : 'Idle'}`);
+      return;
+    case 'help':
+      safeChat('[Commands] !schematic <name> [x y z] [rot], !pyramid <size>, !dome <r>, !tower <r> <h>, !come, !undo, !stop');
       return;
     default:
       return;
   }
 }
 
-async function runBuild(requester, offsets) {
+async function runBuild(requester, offsets, coordInfo = { origin: null, rotation: 0 }) {
+  if (builder.isBuilding()) {
+    safeChat(`Already building — send !stop first, ${requester}.`);
+    return;
+  }
+  const origin = resolveOrigin(requester, coordInfo.origin);
+  builder.enqueue(offsets, origin);
+  safeChat(`[Builder] Building ${offsets.length} blocks at ${origin.x} ${origin.y} ${origin.z}...`);
+  await executeBuild();
+}
+
+async function runSchematicBuild(requester, name, coordInfo = { origin: null, rotation: 0 }) {
+  if (!name) {
+    safeChat('Usage: !schematic <name> [x y z] [rotation 0|90|180|270]');
+    return;
+  }
   if (builder.isBuilding()) {
     safeChat(`Already building — send !stop first, ${requester}.`);
     return;
   }
 
-  let targetEntity = bot.players[requester]?.entity;
-  if (!targetEntity) {
-    const found = Object.values(bot.entities).find(e => e.type === 'player' && e.username && e.username.toLowerCase() === requester.toLowerCase());
-    if (found) targetEntity = found;
+  let blocks;
+  try {
+    blocks = await loadSchematicBlocks(name, coordInfo.rotation);
+  } catch (err) {
+    safeChat(`Failed to parse schematic "${name}": ${err.message}`);
+    return;
   }
 
-  const origin = targetEntity ? targetEntity.position.floored() : (bot.entity ? bot.entity.position.floored() : new Vec3(0, 64, 0));
+  if (!blocks) {
+    safeChat(`Schematic "${name}" not found on server — upload it or check name.`);
+    return;
+  }
+  if (blocks.length === 0) {
+    safeChat(`Schematic "${name}" contains no non-air blocks.`);
+    return;
+  }
 
-  builder.enqueue(offsets, origin);
-  safeChat(`[Builder] Building ${offsets.length} blocks near ${requester}...`);
-  logSystem(`[Builder] Started construction of ${offsets.length} blocks requested by ${requester}`);
+  const origin = resolveOrigin(requester, coordInfo.origin);
+  builder.enqueue(blocks, origin);
+  safeChat(
+    `[Builder] Building "${name}" (${blocks.length} blocks, rot ${coordInfo.rotation}°) ` +
+      `at ${origin.x} ${origin.y} ${origin.z}...`
+  );
+  await executeBuild();
+}
 
+async function executeBuild() {
   try {
     const result = await builder.run((placed, total, done) => {
       if (done) {
-        logSystem(`[Builder] Completed: ${placed}/${total} placed.`);
+        logSystem(`[Builder] Build complete: ${placed}/${total} placed.`);
       }
     });
     if (result && !result.cancelled) {
-      safeChat(`[Builder] Done. Placed ${result.placed}/${result.total} blocks.`);
-      logSystem(`[Builder] Finished build: ${result.placed}/${result.total} placed.`);
+      safeChat(`[Builder] Done. Placed ${result.placed}/${result.total} blocks (${result.mode} mode).`);
     } else if (result && result.cancelled) {
       safeChat(`[Builder] Build stopped: ${result.placed}/${result.total} placed.`);
     }
   } catch (err) {
     safeChat(`[Builder Error] Build failed: ${err.message}`);
-    logSystem(`[Builder Error] ${err.message}`);
   }
 }
 
@@ -599,13 +369,8 @@ async function runUndo(requester) {
     return;
   }
   safeChat('[Undo] Undoing last build...');
-  try {
-    const result = await builder.undo();
-    safeChat(`[OK] Undo complete: removed ${result.undone}/${result.total} blocks.`);
-    logSystem(`[Builder Undo] Undone ${result.undone}/${result.total} blocks.`);
-  } catch (err) {
-    safeChat(`[Undo Error] ${err.message}`);
-  }
+  const result = await builder.undo();
+  safeChat(`[OK] Undo complete: removed ${result.undone}/${result.total} blocks.`);
 }
 
 function stopBuild(requester) {
@@ -615,7 +380,6 @@ function stopBuild(requester) {
   }
   builder.cancel();
   safeChat('[Stop] Stopping after current block...');
-  logSystem(`[Builder] Build cancelled by ${requester}`);
 }
 
 async function comeToPlayer(requester) {
@@ -624,13 +388,12 @@ async function comeToPlayer(requester) {
     player = Object.values(bot.entities).find(e => e.type === 'player' && e.username && e.username.toLowerCase() === requester.toLowerCase());
   }
   if (!player) {
-    safeChat(`Can't see you, ${requester}. Stand closer.`);
+    safeChat(`Can't see you, ${requester}.`);
     return;
   }
   const pos = player.position;
   bot.pathfinder.setGoal(new goals.GoalNear(pos.x, pos.y, pos.z, 2));
   safeChat(`[Movement] Coming to you, ${requester}!`);
-  logSystem(`[Movement] Pathfinding to player ${requester} at (${Math.round(pos.x)}, ${Math.round(pos.y)}, ${Math.round(pos.z)})`);
 }
 
 process.on('unhandledRejection', (err) => {
