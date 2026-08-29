@@ -14,6 +14,7 @@ const { Builder } = require('./src/builder');
 const { SwarmManager } = require('./src/swarm');
 const { installChatCompat } = require('./src/chatCompat');
 const { installFabricSpoof } = require('./src/fabricSpoof');
+const { installPacketDebugger } = require('./src/debugPackets');
 const { parseLitematicBlocks, parseStructureNbtBlocks } = require('./src/schematic');
 
 // ---------------------------------------------------------------------------
@@ -157,6 +158,7 @@ function createBot() {
   bot.loadPlugin(pathfinder);
   installChatCompat(bot);
   installFabricSpoof(bot);
+  installPacketDebugger(bot);
   builder = new Builder(bot, { blockName: process.env.BUILD_BLOCK || 'cobblestone' });
   swarm = new SwarmManager(bot, { host: VIAPROXY_HOST, port: VIAPROXY_PORT, version: BOT_PROTOCOL_VERSION });
 
