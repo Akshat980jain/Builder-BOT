@@ -19,6 +19,29 @@ class Builder {
     this.scaffoldHistory = [];
     this.building = false;
     this.cancelled = false;
+    this.currentJob = { name: 'None', total: 0, placed: 0, startTime: 0 };
+  }
+
+  setJob(name) {
+    this.currentJob.name = name;
+  }
+
+  getStatus() {
+    if (!this.building) {
+      return { active: false, name: 'None', placed: 0, total: 0, left: 0, percent: 0 };
+    }
+    const placed = this.placedHistory.length;
+    const total = this.currentJob.total || (placed + this.queue.length);
+    const left = Math.max(0, total - placed);
+    const percent = total > 0 ? ((placed / total) * 100).toFixed(1) : 0;
+    return {
+      active: true,
+      name: this.currentJob.name,
+      placed,
+      total,
+      left,
+      percent,
+    };
   }
 
   /**
@@ -63,6 +86,11 @@ class Builder {
 
     const { goals } = require('mineflayer-pathfinder');
     const total = this.queue.length;
+    this.currentJob.total = total;
+    this.currentJob.placed = 0;
+    this.currentJob.startTime = Date.now();
+    this.placedHistory = [];
+
     let placed = 0;
     let retries = 0;
     const maxRetries = total * 2;
@@ -74,7 +102,13 @@ class Builder {
         if (didPlace) {
           this.placedHistory.push(target);
           placed++;
-          if (onProgress && placed % 25 === 0) onProgress(placed, total);
+          this.currentJob.placed = placed;
+
+          if (onProgress && placed % 50 === 0) {
+            const left = total - placed;
+            const percent = ((placed / total) * 100).toFixed(1);
+            onProgress(placed, total, left, percent, false);
+          }
         }
       } catch (err) {
         if (err.message && err.message.includes('No reachable reference') && retries < maxRetries) {
@@ -90,8 +124,10 @@ class Builder {
     await this._removeScaffolding(goals);
 
     this.building = false;
-    if (onProgress) onProgress(placed, total, true);
-    return { placed, total, cancelled: this.cancelled };
+    const left = Math.max(0, total - placed);
+    const percent = total > 0 ? ((placed / total) * 100).toFixed(1) : 100;
+    if (onProgress) onProgress(placed, total, left, percent, true);
+    return { placed, total, left, percent, cancelled: this.cancelled };
   }
 
   async _placeOne(target, goals) {
@@ -224,7 +260,7 @@ class Builder {
       if (!scaffoldItem && bot.creative && typeof bot.creative.setInventorySlot === 'function') {
         try {
           const Item = require('prismarine-item')(bot.version || '1.21.4');
-          await bot.creative.setInventorySlot(36, new Item(1, 64)); // stone/dirt
+          await bot.creative.setInventorySlot(36, new Item(1, 64));
           scaffoldItem = bot.inventory.items()[0];
         } catch (e) {}
       }

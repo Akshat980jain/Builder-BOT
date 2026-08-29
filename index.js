@@ -294,21 +294,19 @@ function handleChatLine(username, text) {
 
   switch (cmd) {
     case 'pyramid':
-      return runBuild(username, pyramid(parseInt(args[0], 10) || 5), parseCoordsAndRotation(args.slice(1)));
+      const pyrSize = parseInt(args[0], 10) || 5;
+      return runBuild(username, pyramid(pyrSize), parseCoordsAndRotation(args.slice(1)), `Pyramid (${pyrSize}x${pyrSize})`);
     case 'dome':
-      return runBuild(username, dome(parseInt(args[0], 10) || 6), parseCoordsAndRotation(args.slice(1)));
+      const domeR = parseInt(args[0], 10) || 6;
+      return runBuild(username, dome(domeR), parseCoordsAndRotation(args.slice(1)), `Dome (r=${domeR})`);
     case 'tower':
-      return runBuild(
-        username,
-        tower(parseInt(args[0], 10) || 2, parseInt(args[1], 10) || 10),
-        parseCoordsAndRotation(args.slice(2))
-      );
+      const tR = parseInt(args[0], 10) || 2;
+      const tH = parseInt(args[1], 10) || 10;
+      return runBuild(username, tower(tR, tH), parseCoordsAndRotation(args.slice(2)), `Tower (r=${tR}, h=${tH})`);
     case 'stairs':
-      return runBuild(
-        username,
-        tower(parseInt(args[0], 10) || 3, parseInt(args[1], 10) || 12),
-        parseCoordsAndRotation(args.slice(2))
-      );
+      const sW = parseInt(args[0], 10) || 3;
+      const sH = parseInt(args[1], 10) || 12;
+      return runBuild(username, tower(sW, sH), parseCoordsAndRotation(args.slice(2)), `Staircase (w=${sW}, h=${sH})`);
     case 'schematic':
       const parsed = parseSchematicCommand(args);
       return runSchematicBuild(username, parsed.name, parsed.coordInfo);
@@ -321,24 +319,30 @@ function handleChatLine(username, text) {
     case 'status':
       const pos = bot.entity ? bot.entity.position : null;
       const posStr = pos ? `(${Math.round(pos.x)}, ${Math.round(pos.y)}, ${Math.round(pos.z)})` : 'unknown';
-      safeChat(`[Status] Health: ${Math.round(bot.health || 20)}/20 | Mode: ${bot.game?.gameMode || 'survival'} | Pos: ${posStr} | Building: ${builder.isBuilding() ? 'Active' : 'Idle'}`);
+      const bStatus = builder.getStatus();
+      if (bStatus.active) {
+        safeChat(`[Status] Building: "${bStatus.name}" | ${bStatus.placed}/${bStatus.total} placed (${bStatus.left} left, ${bStatus.percent}%) | Pos: ${posStr}`);
+      } else {
+        safeChat(`[Status] Health: ${Math.round(bot.health || 20)}/20 | Mode: ${bot.game?.gameMode || 'creative'} | Building: Idle | Pos: ${posStr}`);
+      }
       return;
     case 'help':
-      safeChat('[Commands] !schematic <name> [x y z] [rot], !pyramid <size>, !dome <r>, !tower <r> <h>, !come, !undo, !stop');
+      safeChat('[Commands] !schematic <name> [x y z] [rot], !pyramid <size>, !dome <r>, !tower <r> <h>, !status, !come, !undo, !stop');
       return;
     default:
       return;
   }
 }
 
-async function runBuild(requester, offsets, coordInfo = { origin: null, rotation: 0 }) {
+async function runBuild(requester, offsets, coordInfo = { origin: null, rotation: 0 }, shapeName = 'Structure') {
   if (builder.isBuilding()) {
     safeChat(`Already building — send !stop first, ${requester}.`);
     return;
   }
+  builder.setJob(shapeName);
   const origin = resolveOrigin(requester, coordInfo.origin);
   builder.enqueue(offsets, origin);
-  safeChat(`[Builder] Building ${offsets.length} blocks at ${origin.x} ${origin.y} ${origin.z}...`);
+  safeChat(`[Builder] Building "${shapeName}" (${offsets.length} blocks) at ${origin.x} ${origin.y} ${origin.z}...`);
   await executeBuild();
 }
 
@@ -369,6 +373,7 @@ async function runSchematicBuild(requester, name, coordInfo = { origin: null, ro
     return;
   }
 
+  builder.setJob(name);
   const origin = resolveOrigin(requester, coordInfo.origin);
   builder.enqueue(blocks, origin);
   safeChat(
@@ -380,15 +385,18 @@ async function runSchematicBuild(requester, name, coordInfo = { origin: null, ro
 
 async function executeBuild() {
   try {
-    const result = await builder.run((placed, total, done) => {
+    const jobName = builder.currentJob.name;
+    const result = await builder.run((placed, total, left, percent, done) => {
       if (done) {
         logSystem(`[Builder] Build complete: ${placed}/${total} placed.`);
+      } else {
+        safeChat(`[Progress] "${jobName}": ${placed}/${total} placed (${left} left - ${percent}%)`);
       }
     });
     if (result && !result.cancelled) {
-      safeChat(`[Builder] Done. Placed ${result.placed}/${result.total} blocks (${result.mode} mode).`);
+      safeChat(`[Builder] Done! Placed ${result.placed}/${result.total} blocks for "${jobName}".`);
     } else if (result && result.cancelled) {
-      safeChat(`[Builder] Build stopped: ${result.placed}/${result.total} placed.`);
+      safeChat(`[Builder] Build stopped: ${result.placed}/${result.total} placed for "${jobName}".`);
     }
   } catch (err) {
     safeChat(`[Builder Error] Build failed: ${err.message}`);
