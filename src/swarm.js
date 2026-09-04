@@ -13,7 +13,7 @@ try {
 
 /**
  * 24/7 Persistent Swarm Manager for Minecraft Builder Bot.
- * Maintains a persistent fleet of 10 bots, with auto-reconnect,
+ * Maintains a persistent fleet of bots, with auto-reconnect,
  * dual-auth registration/login, anti-AFK, and parallel schematic building.
  */
 class SwarmManager {
@@ -35,13 +35,14 @@ class SwarmManager {
     }
 
     this.maxWorkers = 10;
-    this.targetWorkers = this.config.swarm?.targetCount || 10;
-    this.placeDelayMs = options.placeDelayMs || this.config.swarm?.placeDelayMs || 80;
-    this.staggerDelay = this.config.swarm?.staggerJoinDelay || 6000;
+    this.targetWorkers = this.config.swarm?.targetCount || 3;
+    this.placeDelayMs = options.placeDelayMs || this.config.swarm?.placeDelayMs || 120;
+    this.staggerDelay = this.config.swarm?.staggerJoinDelay || 12000;
     this.authPassword = this.config.swarm?.autoAuthPassword || this.config.utils?.['auto-auth']?.password || 'chalol78';
 
-    this.workers = new Map(); // id (2..10) -> { id, bot, builder, username, connected, connecting, reconnectAttempts }
+    this.workers = new Map(); // id (2..10) -> { id, bot, builder, username, connected, connecting, reconnectAttempts, throttleKicked }
     this.heartbeatTimers = new Map();
+    this.reconnectTimers = new Map();
     this.reconnectQueue = [];
     this.isProcessingQueue = false;
     this.supervisorInterval = null;
@@ -74,15 +75,15 @@ class SwarmManager {
     if (this.isSupervisorRunning) return;
     this.isSupervisorRunning = true;
 
-    console.log(`[Swarm Supervisor] 🛡️ 24/7 Fleet Watchdog started. Target fleet: ${this.targetWorkers} bots.`);
+    console.log(`[Swarm Supervisor] 🛡️ Fleet Watchdog active. Target fleet: ${this.targetWorkers} bots.`);
 
-    // Trigger initial check
+    // Initial check
     this.ensureAllBotsAlive();
 
-    // Check every 12 seconds
+    // Check every 15 seconds
     this.supervisorInterval = setInterval(() => {
       this.ensureAllBotsAlive();
-    }, 12000);
+    }, 15000);
   }
 
   stopSupervisor() {
@@ -101,15 +102,16 @@ class SwarmManager {
       const isConnected = entry && entry.connected && entry.bot && entry.bot.entity;
       const isConnecting = entry && entry.connecting;
       const isInQueue = this.reconnectQueue.includes(id);
+      const hasScheduledTimer = this.reconnectTimers.has(id);
 
-      if (!isConnected && !isConnecting && !isInQueue) {
-        this.enqueueReconnect(id, 1000);
+      if (!isConnected && !isConnecting && !isInQueue && !hasScheduledTimer) {
+        this.enqueueReconnect(id, 2000);
       }
     }
   }
 
   async setWorkerCount(count) {
-    this.targetWorkers = Math.max(1, Math.min(this.maxWorkers, parseInt(count, 10) || 10));
+    this.targetWorkers = Math.max(1, Math.min(this.maxWorkers, parseInt(count, 10) || 1));
     console.log(`[Swarm] Fleet target count set to ${this.targetWorkers} bots.`);
 
     // Despawn excess bots
@@ -117,17 +119,24 @@ class SwarmManager {
       this.despawnWorker(id);
     }
 
-    this.startSupervisor();
-    this.ensureAllBotsAlive();
+    if (this.targetWorkers > 1) {
+      this.startSupervisor();
+      this.ensureAllBotsAlive();
+    }
     return this.targetWorkers;
   }
 
-  spawnSwarm(count = 10) {
+  spawnSwarm(count = 3) {
     return this.setWorkerCount(count);
   }
 
   despawnWorker(id) {
     if (id <= 1 || id > this.maxWorkers) return;
+
+    if (this.reconnectTimers.has(id)) {
+      clearTimeout(this.reconnectTimers.get(id));
+      this.reconnectTimers.delete(id);
+    }
 
     const qIdx = this.reconnectQueue.indexOf(id);
     if (qIdx !== -1) this.reconnectQueue.splice(qIdx, 1);
@@ -139,16 +148,18 @@ class SwarmManager {
       if (entry.builder) {
         try { entry.builder.cancel(); } catch (_) {}
       }
-      if (entry.bot) {
-        try { entry.bot.quit('Despawned by command'); } catch (_) {}
-      }
       this.workers.delete(id);
     }
     console.log(`[Swarm] Worker ${id} despawned cleanly.`);
   }
 
   despawnSwarm(keepPrimary = true) {
+    for (const timer of this.reconnectTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.reconnectTimers.clear();
     this.reconnectQueue = [];
+
     const startId = keepPrimary ? 2 : 1;
     for (let id = startId; id <= this.maxWorkers; id++) {
       this.despawnWorker(id);
@@ -175,6 +186,7 @@ class SwarmManager {
           connected: false,
           connecting: true,
           reconnectAttempts: 0,
+          throttleKicked: false,
         };
         this.workers.set(id, entry);
       } else {
@@ -182,7 +194,7 @@ class SwarmManager {
         entry.connected = false;
       }
 
-      console.log(`[Swarm] 🔌 Connecting ${username} (${id}/10) to ${this.host}:${this.port}...`);
+      console.log(`[Swarm] 🔌 Connecting ${username} (${id}/${this.targetWorkers}) to ${this.host}:${this.port}...`);
 
       let resolved = false;
 
@@ -226,14 +238,13 @@ class SwarmManager {
           entry.connected = true;
           entry.connecting = false;
           entry.reconnectAttempts = 0;
+          entry.throttleKicked = false;
           console.log(`[Swarm] ✅ ${username} spawned successfully in world!`);
 
           const defaultMove = new Movements(bot);
           bot.pathfinder.setMovements(defaultMove);
 
-          // Dual-Action Auto-Auth sequence:
-          // 1. Send /register in case bot is new
-          // 2. Send /login in case bot is already registered
+          // Auto-Auth sequence
           setTimeout(() => {
             try { bot.chat(`/register ${this.authPassword} ${this.authPassword}`); } catch (_) {}
           }, 1200);
@@ -242,12 +253,11 @@ class SwarmManager {
             try { bot.chat(`/login ${this.authPassword}`); } catch (_) {}
           }, 2600);
 
-          // Put worker into creative mode
           setTimeout(() => {
             try { bot.chat(`/gamemode creative ${username}`); } catch (_) {}
           }, 4500);
 
-          // 24/7 Anti-AFK Routine (Arm swing + Micro-yaw + Sneak pulse)
+          // Anti-AFK Routine
           if (this.heartbeatTimers.has(id)) clearInterval(this.heartbeatTimers.get(id));
           let afkTick = 0;
           const hb = setInterval(() => {
@@ -259,16 +269,9 @@ class SwarmManager {
                 const pitch = bot.entity.pitch;
                 const offset = afkTick % 2 === 0 ? 0.05 : -0.05;
                 bot.look(yaw + offset, pitch, true).catch(() => {});
-
-                if (afkTick % 3 === 0) {
-                  bot.setControlState('sneak', true);
-                  setTimeout(() => {
-                    try { bot.setControlState('sneak', false); } catch (_) {}
-                  }, 1000);
-                }
               } catch (_) {}
             }
-          }, 20000);
+          }, 25000);
           this.heartbeatTimers.set(id, hb);
 
           if (!resolved) {
@@ -282,8 +285,10 @@ class SwarmManager {
           console.log(`[Swarm] ⚠️ ${username} kicked: ${reasonStr}`);
           entry.connected = false;
           entry.connecting = false;
-          this.cleanUpBot(id);
-          this.enqueueReconnect(id, 8000);
+          const lc = reasonStr.toLowerCase();
+          if (lc.includes('throttl') || lc.includes('too many') || lc.includes('please wait')) {
+            entry.throttleKicked = true;
+          }
 
           if (!resolved) {
             resolved = true;
@@ -292,11 +297,18 @@ class SwarmManager {
         });
 
         bot.on('end', () => {
-          console.log(`[Swarm] 🔌 ${username} connection ended. Scheduling auto-reconnect...`);
+          console.log(`[Swarm] 🔌 ${username} connection ended.`);
           entry.connected = false;
           entry.connecting = false;
           this.cleanUpBot(id);
-          this.enqueueReconnect(id, 5000);
+
+          let delay = 15000;
+          if (entry.throttleKicked) {
+            entry.throttleKicked = false;
+            delay = 90000; // 90s cooldown for server connection throttling
+            console.log(`[Swarm] ⏳ ${username} server throttle detected — waiting 90s before retry.`);
+          }
+          this.enqueueReconnect(id, delay);
 
           if (!resolved) {
             resolved = true;
@@ -308,22 +320,22 @@ class SwarmManager {
           console.log(`[Swarm] ${username} notice: ${err.message}`);
         });
 
-        // Fail-safe timeout
+        // Fail-safe connection timeout (30s)
         setTimeout(() => {
           if (!resolved) {
             resolved = true;
             entry.connecting = false;
             this.cleanUpBot(id);
-            this.enqueueReconnect(id, 6000);
-            reject(new Error('Connection timeout (25s)'));
+            this.enqueueReconnect(id, 10000);
+            reject(new Error('Connection timeout (30s)'));
           }
-        }, 25000);
+        }, 30000);
 
       } catch (e) {
         entry.connecting = false;
         if (!resolved) {
           resolved = true;
-          this.enqueueReconnect(id, 6000);
+          this.enqueueReconnect(id, 10000);
           reject(e);
         }
       }
@@ -340,24 +352,34 @@ class SwarmManager {
       entry.connected = false;
       if (entry.bot) {
         try { entry.bot.removeAllListeners(); } catch (_) {}
+        try { entry.bot._client?.removeAllListeners(); } catch (_) {}
+        try { entry.bot.quit('Cleanup'); } catch (_) {}
+        try { entry.bot._client?.end(); } catch (_) {}
+        entry.bot = null;
       }
     }
   }
 
   enqueueReconnect(id, delay = 0) {
     if (id <= 1 || id > this.targetWorkers) return;
-    if (this.reconnectQueue.includes(id)) return;
-
     const entry = this.workers.get(id);
     if (entry && entry.connected) return;
+    if (this.reconnectQueue.includes(id)) return;
+
+    if (this.reconnectTimers.has(id)) {
+      clearTimeout(this.reconnectTimers.get(id));
+      this.reconnectTimers.delete(id);
+    }
 
     if (delay > 0) {
-      setTimeout(() => {
+      const timer = setTimeout(() => {
+        this.reconnectTimers.delete(id);
         if (!this.reconnectQueue.includes(id)) {
           this.reconnectQueue.push(id);
           this.processReconnectQueue();
         }
       }, delay);
+      this.reconnectTimers.set(id, timer);
     } else {
       this.reconnectQueue.push(id);
       this.processReconnectQueue();
@@ -381,7 +403,7 @@ class SwarmManager {
       } catch (err) {
         const attempts = (entry ? entry.reconnectAttempts : 0) + 1;
         if (entry) entry.reconnectAttempts = attempts;
-        const backoff = Math.min(this.staggerDelay * Math.min(attempts, 4), 30000);
+        const backoff = Math.min(this.staggerDelay * Math.min(attempts, 4), 60000);
         console.log(`[Swarm] Reconnect for Bot ${nextId} failed (${err.message}). Retrying in ${(backoff / 1000).toFixed(0)}s...`);
         this.enqueueReconnect(nextId, backoff);
       }

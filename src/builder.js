@@ -36,19 +36,26 @@ function blockToItemName(blockName) {
   return specialMap[clean] || clean;
 }
 
+const REPLACEABLE_BLOCKS = new Set([
+  'short_grass', 'grass', 'tall_grass', 'fern', 'large_fern',
+  'dead_bush', 'dandelion', 'poppy', 'blue_orchid', 'allium',
+  'azure_bluet', 'red_tulip', 'orange_tulip', 'white_tulip',
+  'pink_tulip', 'oxeye_daisy', 'cornflower', 'lily_of_the_valley',
+  'wither_rose', 'sunflower', 'lilac', 'rose_bush', 'peony',
+  'snow', 'vine', 'glow_lichen', 'seagrass', 'tall_seagrass'
+]);
+
 /**
  * High-performance, resilient builder engine for Mineflayer bots.
  * Features:
- * - Zero-Skip Precision: clears/replaces natural ground obstacles if different from schematic
- * - Anti-Self-Collision: automatically steps back so the bot never collides with target blocks
- * - Arm-swing animation for visible, physical block placement
- * - 100% exact per-block schematic material palette reproduction
- * - Auto-Creative item provisioning for every block in the schematic
- * - Automatic Ground Anchor for floating/mid-air/water builds
- * - Instant cancellation and pathfinder abort on !stop
+ * - Robust placement with network-friendly timeouts (4500ms)
+ * - True Anti-Self-Collision: steps away from target block in both survival and creative
+ * - Safe obstacle clearing for grass, flowers, and natural blocks
+ * - Creative item provisioning + survival inventory fallback
+ * - Max retry backoff per block to prevent infinite hand-waving loops
  */
 class Builder {
-  constructor(bot, { blockName = 'cobblestone', placeDelayMs = 80, scaffoldBlock = 'dirt' } = {}) {
+  constructor(bot, { blockName = 'cobblestone', placeDelayMs = 120, scaffoldBlock = 'dirt' } = {}) {
     this.bot = bot;
     this.blockName = blockName;
     this.placeDelayMs = placeDelayMs;
@@ -140,7 +147,7 @@ class Builder {
 
     let placed = 0;
     let consecutiveFails = 0;
-    const maxConsecutiveFails = Math.max(total * 2, 200);
+    const maxConsecutiveFails = Math.max(total * 3, 100);
 
     while (this.queue.length > 0 && !this.cancelled && this.building && consecutiveFails < maxConsecutiveFails) {
       const target = this.queue.shift();
@@ -154,14 +161,19 @@ class Builder {
           this.currentJob.placed = placed;
           consecutiveFails = 0;
 
-          if (onProgress && (placed % 25 === 0 || placed === total)) {
+          if (onProgress && (placed % 10 === 0 || placed === total)) {
             const left = total - placed;
             const percent = ((placed / total) * 100).toFixed(1);
             onProgress(placed, total, left, percent, false);
           }
         }
       } catch (err) {
-        this.queue.push(target);
+        target.retries = (target.retries || 0) + 1;
+        if (target.retries <= 3) {
+          this.queue.push(target);
+        } else {
+          console.log(`[Builder] Skipping block at ${target.pos} after 3 attempts (${err.message})`);
+        }
         consecutiveFails++;
       }
       await sleep(this.placeDelayMs);
@@ -184,15 +196,20 @@ class Builder {
     // 1. Check if the block at target.pos is ALREADY the exact target block
     const current = bot.blockAt(target.pos);
     if (current && current.name === targetBlockName) {
-      return false; // Already the exact correct schematic block!
+      return false; // Already placed
     }
 
-    // 2. If an unwanted obstacle is in the target position (e.g. natural dirt, stone, grass), clear it first!
+    // 2. Clear obstacles if needed
     if (current && current.name && !current.name.includes('air') && current.name !== 'water' && current.name !== 'lava') {
-      try {
-        await this._moveToPosition(target.pos, target.pos);
-        await withTimeout(bot.dig(current), 800);
-      } catch (e) {}
+      const isReplaceable = REPLACEABLE_BLOCKS.has(current.name);
+      if (!isReplaceable) {
+        try {
+          await this._moveToPosition(target.pos, target.pos);
+          if (bot.canDigBlock(current)) {
+            await withTimeout(bot.dig(current), 3500);
+          }
+        } catch (e) {}
+      }
     }
 
     // 3. Find solid reference block to place against
@@ -205,7 +222,7 @@ class Builder {
     }
     const { refPos, faceVector } = referenceInfo;
 
-    // 4. Move/Fly close enough to place AND ensure bot does not collide with target.pos
+    // 4. Move to safe placing position: NOT colliding with target.pos, AND within reach of refPos (2-3.5 blocks)
     await this._moveToPosition(target.pos, refPos);
 
     // 5. Creative Mode Item Provisioning: Synthesize the exact matching item stack
@@ -227,12 +244,15 @@ class Builder {
         (targetBlockName.includes('deepslate') && i.name.includes('deepslate'))
       );
     }
+    if (!item && bot.heldItem && bot.heldItem.name) {
+      item = bot.heldItem;
+    }
 
     if (!item) {
       throw new Error(`Out of material: ${itemName} (for ${targetBlockName})`);
     }
 
-    // 6. Equip to main hand (updates held item visually)
+    // 6. Equip to main hand
     if (!bot.heldItem || (bot.heldItem.name !== item.name && bot.heldItem.name !== itemName)) {
       try {
         await bot.equip(item, 'hand');
@@ -252,14 +272,15 @@ class Builder {
     );
 
     try {
-      await withTimeout(bot.lookAt(refBlock.position.plus(faceOffset), true), 300);
+      await withTimeout(bot.lookAt(refBlock.position.plus(faceOffset), true), 400);
     } catch (e) {}
 
+    // Place block: give realistic timeout (4500ms) for network latency
     try {
-      await withTimeout(bot.placeBlock(refBlock, faceVector), 600);
-      try { bot.swingArm('right'); } catch (e) {}
+      await withTimeout(bot.placeBlock(refBlock, faceVector), 4500);
       return true;
     } catch (err) {
+      // Check if the block actually got placed despite timeout or error
       const verify = bot.blockAt(target.pos);
       if (verify && verify.name && !verify.name.includes('air')) {
         return true;
@@ -270,31 +291,46 @@ class Builder {
 
   async _moveToPosition(targetPos, refPos) {
     const bot = this.bot;
-    const currentPos = bot.entity ? bot.entity.position : new Vec3(0, 64, 0);
+    if (!bot.entity) return;
+    const currentPos = bot.entity.position;
     const distToTarget = currentPos.distanceTo(targetPos);
     const distToRef = currentPos.distanceTo(refPos);
 
-    // Anti-collision: if bot is standing inside the target block (< 1.2 blocks), step back!
-    if (distToTarget < 1.2) {
-      const stepBack = new Vec3(
-        targetPos.x + (currentPos.x >= targetPos.x ? 1.5 : -1.5),
-        Math.max(targetPos.y, currentPos.y),
-        targetPos.z + (currentPos.z >= targetPos.z ? 1.5 : -1.5)
-      );
+    // 1. Anti-collision: Ensure bot's bounding box does NOT overlap targetPos
+    // Minecraft player hitbox is 0.6x0.6 horizontal, 1.8 height.
+    const isColliding = Math.abs(currentPos.x - (targetPos.x + 0.5)) < 0.9 &&
+                        Math.abs(currentPos.z - (targetPos.z + 0.5)) < 0.9 &&
+                        currentPos.y <= (targetPos.y + 1.2) &&
+                        (currentPos.y + 1.8) >= targetPos.y;
+
+    if (isColliding || distToTarget < 1.3) {
+      const dx = currentPos.x >= targetPos.x + 0.5 ? 2.0 : -2.0;
+      const dz = currentPos.z >= targetPos.z + 0.5 ? 2.0 : -2.0;
+      const safePos = new Vec3(targetPos.x + 0.5 + dx, Math.max(targetPos.y, currentPos.y), targetPos.z + 0.5 + dz);
+
       if (bot.creative && typeof bot.creative.flyTo === 'function') {
-        try { await withTimeout(bot.creative.flyTo(stepBack), 500); } catch (e) {}
+        try { await withTimeout(bot.creative.flyTo(safePos), 1000); } catch (e) {}
+      } else if (bot.pathfinder) {
+        try {
+          const { goals } = require('mineflayer-pathfinder');
+          await withTimeout(bot.pathfinder.goto(new goals.GoalNear(safePos.x, safePos.y, safePos.z, 0.8)), 2500);
+        } catch (e) {}
       }
     }
 
-    // If too far from reference block (> 3.8 blocks), move closer
-    if (distToRef > 3.8) {
-      const standPos = new Vec3(refPos.x + 1.2, refPos.y + 1.2, refPos.z + 1.2);
+    // 2. Reach check: Must be within reach distance of refPos (MC reach is ~4.5 blocks, stand at 2.0-3.2)
+    const currentDistToRef = bot.entity ? bot.entity.position.distanceTo(refPos) : distToRef;
+    if (currentDistToRef > 3.6) {
+      const standX = refPos.x + (refPos.x > (bot.entity?.position.x || 0) ? -1.8 : 1.8);
+      const standZ = refPos.z + (refPos.z > (bot.entity?.position.z || 0) ? -1.8 : 1.8);
+      const standY = refPos.y;
+
       if (bot.creative && typeof bot.creative.flyTo === 'function') {
-        try { await withTimeout(bot.creative.flyTo(standPos), 800); } catch (e) {}
-      } else {
+        try { await withTimeout(bot.creative.flyTo(new Vec3(standX, standY + 1.0, standZ)), 1200); } catch (e) {}
+      } else if (bot.pathfinder) {
         try {
           const { goals } = require('mineflayer-pathfinder');
-          await withTimeout(bot.pathfinder.goto(new goals.GoalNear(refPos.x, refPos.y, refPos.z, 2.5)), 1500);
+          await withTimeout(bot.pathfinder.goto(new goals.GoalNear(refPos.x, refPos.y, refPos.z, 2.5)), 3500);
         } catch (e) {}
       }
     }
@@ -361,8 +397,7 @@ class Builder {
 
       await this._moveToPosition(pillarPos, below);
       try {
-        await withTimeout(bot.placeBlock(belowBlock, new Vec3(0, 1, 0)), 600);
-        try { bot.swingArm('right'); } catch (e) {}
+        await withTimeout(bot.placeBlock(belowBlock, new Vec3(0, 1, 0)), 3000);
         this.scaffoldHistory.push(pillarPos);
       } catch (e) {
         break;
@@ -388,7 +423,7 @@ class Builder {
           if (currentPos.distanceTo(pos) > 4.0) {
             await this._moveToPosition(pos, pos);
           }
-          await withTimeout(bot.dig(block), 1500);
+          await withTimeout(bot.dig(block), 2500);
         } catch (err) {
           bot.emit('builder_undo_error', pos, err);
         }

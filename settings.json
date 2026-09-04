@@ -19,12 +19,12 @@
   },
   "swarm": {
     "enabled": true,
-    "targetCount": 10,
-    "autoSpawnAll": true,
-    "staggerJoinDelay": 6000,
+    "targetCount": 3,
+    "autoSpawnAll": false,
+    "staggerJoinDelay": 15000,
     "autoAuthPassword": "chalol78",
     "antiAfk": true,
-    "placeDelayMs": 80
+    "placeDelayMs": 120
   },
   "builder": {
     "defaultBlock": "cobblestone"
@@ -35,8 +35,8 @@
       "password": "chalol78"
     },
     "auto-reconnect": true,
-    "auto-reconnect-delay": 3000,
-    "max-reconnect-delay": 30000,
+    "auto-reconnect-delay": 15000,
+    "max-reconnect-delay": 60000,
     "chat-log": true
   },
   "web": {

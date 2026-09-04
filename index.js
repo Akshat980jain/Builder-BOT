@@ -543,15 +543,20 @@ function createBot() {
 
   builder = new Builder(bot, {
     blockName: config.builder?.defaultBlock || 'cobblestone',
-    placeDelayMs: config.swarm?.placeDelayMs || 80,
+    placeDelayMs: config.swarm?.placeDelayMs || 120,
   });
 
-  swarm = new SwarmManager(bot, {
-    host: TARGET_HOST,
-    port: TARGET_PORT,
-    version: TARGET_VERSION || '1.21.4',
-    placeDelayMs: config.swarm?.placeDelayMs || 80,
-  }, config);
+  if (!swarm) {
+    swarm = new SwarmManager(bot, {
+      host: TARGET_HOST,
+      port: TARGET_PORT,
+      version: TARGET_VERSION || '1.21.4',
+      placeDelayMs: config.swarm?.placeDelayMs || 120,
+    }, config);
+  } else {
+    swarm.mainBot = bot;
+    swarm.mainBuilder = builder;
+  }
 
   // Smart Dual-Auth Chat Listener
   const handleAuthMessage = (msg) => {
@@ -615,7 +620,7 @@ function createBot() {
       }
     }, 20000);
 
-    safeChat(`[BuilderBot] Online! 24/7 10-Bot Swarm Active. Commands: !swarm <count>, !pyramid, !dome, !tower, !schematic <name>, !stop`);
+    safeChat(`[BuilderBot] Online! Commands: !pyramid <size>, !dome <r>, !tower <r> <h>, !schematic <name>, !swarm <count>, !status, !come, !stop`);
   });
 
   let lastCmdTime = 0;
@@ -636,6 +641,23 @@ function createBot() {
     logSystem(`[Whisper from ${username}] ${message}`);
     const clean = message.trim().startsWith('!') ? message.trim() : '!' + message.trim();
     handleChatLine(username, clean);
+  });
+
+  bot.on('messagestr', (message) => {
+    if (!message) return;
+    const clean = message.trim();
+    const cmdMatch = clean.match(/(?:<([^>]+)>|([A-Za-z0-9_]{3,16})\s*[:»>])?\s*(![a-zA-Z0-9_-]+.*)/);
+    if (cmdMatch) {
+      const sender = cmdMatch[1] || cmdMatch[2] || 'Player';
+      const cmdText = cmdMatch[3].trim();
+      if (sender.startsWith('BuilderBot')) return;
+      const now = Date.now();
+      if (cmdText === lastCmdText && now - lastCmdTime < 1000) return;
+      lastCmdTime = now;
+      lastCmdText = cmdText;
+      logSystem(`[Command via messagestr] From ${sender}: ${cmdText}`);
+      handleChatLine(sender, cmdText);
+    }
   });
 
   bot.on('builder_place_error', (pos, err) => {
@@ -665,10 +687,13 @@ function createBot() {
     logSystem(`[Bot Error] ${err.message}`);
   });
 
-  // 'end' always fires on disconnect — this is the ONLY place we schedule reconnect
   bot.on('end', (reason) => {
     botStatus = 'disconnected';
     reconnectAttempts++;
+    if (afkInterval) {
+      clearInterval(afkInterval);
+      afkInterval = null;
+    }
 
     let delay;
     if (kickedDelay !== null) {
@@ -732,8 +757,25 @@ function parseCoordsAndRotation(args) {
 
 function resolveOrigin(requester, explicitOrigin) {
   if (explicitOrigin) return explicitOrigin;
-  const player = bot.players[requester]?.entity;
-  return player ? player.position.floored() : (bot.entity ? bot.entity.position.floored() : new Vec3(0, 64, 0));
+  let player = bot.players[requester]?.entity;
+  if (!player) {
+    player = Object.values(bot.entities).find(
+      (e) => e.type === 'player' && e.username && e.username.toLowerCase() === requester.toLowerCase()
+    );
+  }
+  if (player) {
+    const yaw = player.yaw || 0;
+    const fx = Math.round(-Math.sin(yaw) * 4);
+    const fz = Math.round(Math.cos(yaw) * 4);
+    return player.position.floored().offset(fx, 0, fz);
+  }
+  if (bot.entity) {
+    const yaw = bot.entity.yaw || 0;
+    const fx = Math.round(-Math.sin(yaw) * 4);
+    const fz = Math.round(Math.cos(yaw) * 4);
+    return bot.entity.position.floored().offset(fx, 0, fz);
+  }
+  return new Vec3(0, 64, 0);
 }
 
 function parseSchematicCommand(args) {
