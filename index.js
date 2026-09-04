@@ -512,6 +512,7 @@ let builder = null;
 let swarm = null;
 let reconnectTimer = null;
 let afkInterval = null;
+let kickedDelay = null; // set by 'kicked' handler, consumed by 'end' handler
 
 function safeChat(msg) {
   if (bot && bot.entity && typeof bot.chat === 'function') {
@@ -645,41 +646,49 @@ function createBot() {
     logSystem(`[Undo Error] Failed at ${pos}: ${err.message}`);
   });
 
+  // 'kicked' fires first — store the desired delay so 'end' can use it
   bot.on('kicked', (reason) => {
     const reasonStr = describeDisconnectReason(reason);
     logSystem(`[Bot Kicked] ${reasonStr}`);
     botStatus = `Kicked: ${reasonStr}`;
-    reconnectAttempts++;
     const lc = reasonStr.toLowerCase();
-    let delay;
     if (lc.includes('throttl') || lc.includes('too many') || lc.includes('please wait')) {
-      delay = THROTTLE_RECONNECT_DELAY_MS;
-      logSystem(`[Reconnect] Server throttle detected — waiting ${delay / 1000}s before retry.`);
+      kickedDelay = THROTTLE_RECONNECT_DELAY_MS;
+      logSystem(`[Reconnect] Server throttle detected — will wait ${kickedDelay / 1000}s before retry.`);
     } else {
-      delay = Math.min(RECONNECT_DELAY_MS * Math.pow(1.5, reconnectAttempts - 1), MAX_RECONNECT_DELAY_MS);
+      // Calculate with current attempt count (will be incremented in 'end')
+      kickedDelay = Math.min(RECONNECT_DELAY_MS * Math.pow(1.5, reconnectAttempts), MAX_RECONNECT_DELAY_MS);
     }
-    scheduleReconnect(delay);
   });
 
   bot.on('error', (err) => {
     logSystem(`[Bot Error] ${err.message}`);
   });
 
+  // 'end' always fires on disconnect — this is the ONLY place we schedule reconnect
   bot.on('end', (reason) => {
     botStatus = 'disconnected';
-    const desc = describeDisconnectReason(reason);
     reconnectAttempts++;
-    const lc = desc.toLowerCase();
+
     let delay;
-    if (lc.includes('throttl') || lc.includes('too many') || lc.includes('please wait')) {
-      delay = THROTTLE_RECONNECT_DELAY_MS;
-      logSystem(`[Reconnect] Throttle/flood detected — waiting ${delay / 1000}s before retry.`);
-    } else if (lc.includes('duplicate_login')) {
-      delay = DUPLICATE_LOGIN_RECONNECT_DELAY_MS;
+    if (kickedDelay !== null) {
+      // Use the delay computed by the 'kicked' handler
+      delay = kickedDelay;
+      kickedDelay = null;
     } else {
-      delay = Math.min(RECONNECT_DELAY_MS * Math.pow(1.5, Math.max(0, reconnectAttempts - 1)), MAX_RECONNECT_DELAY_MS);
+      // Connection dropped without a kick (network error, server restart, etc.)
+      const desc = describeDisconnectReason(reason);
+      const lc = desc.toLowerCase();
+      if (lc.includes('throttl') || lc.includes('too many') || lc.includes('please wait')) {
+        delay = THROTTLE_RECONNECT_DELAY_MS;
+      } else if (lc.includes('duplicate_login')) {
+        delay = DUPLICATE_LOGIN_RECONNECT_DELAY_MS;
+      } else {
+        delay = Math.min(RECONNECT_DELAY_MS * Math.pow(1.5, Math.max(0, reconnectAttempts - 1)), MAX_RECONNECT_DELAY_MS);
+      }
     }
-    logSystem(`[Bot Disconnected] Reason: ${desc}. Reconnecting in ${(delay / 1000).toFixed(0)}s... (attempt #${reconnectAttempts})`);
+
+    logSystem(`[Bot Disconnected] Reconnecting in ${(delay / 1000).toFixed(0)}s... (attempt #${reconnectAttempts})`);
     scheduleReconnect(delay);
   });
 }
