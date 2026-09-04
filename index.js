@@ -56,9 +56,12 @@ const TARGET_PORT = USE_VIAPROXY ? Number(config.server.viaProxy.port || 25577) 
 const TARGET_VERSION = USE_VIAPROXY ? '1.21.4' : (REAL_SERVER_VERSION !== 'auto' ? REAL_SERVER_VERSION : false);
 
 const BOT_USERNAME = process.env.BOT_NAME || process.env.BOT_USERNAME || config.bot?.username || 'BuilderBot';
-const RECONNECT_DELAY_MS = config.utils?.['auto-reconnect-delay'] || 10000;
-const DUPLICATE_LOGIN_RECONNECT_DELAY_MS = 18000;
+const RECONNECT_DELAY_MS = config.utils?.['auto-reconnect-delay'] || 15000;
+const DUPLICATE_LOGIN_RECONNECT_DELAY_MS = 20000;
+const THROTTLE_RECONNECT_DELAY_MS = 90000;   // 90s when server throttles us
+const MAX_RECONNECT_DELAY_MS = config.utils?.['max-reconnect-delay'] || 120000;
 const HTTP_PORT = process.env.PORT || config.web?.port || 8080;
+let reconnectAttempts = 0; // tracks consecutive failures for backoff
 
 // ---------------------------------------------------------------------------
 // Express Keep-Alive, Swarm Management & Schematic Web Server
@@ -568,6 +571,7 @@ function createBot() {
 
   bot.once('spawn', () => {
     botStatus = 'connected';
+    reconnectAttempts = 0; // reset backoff on successful connection
     logSystem(`[Bot] ✅ ${BOT_USERNAME} spawned successfully into Minecraft world!`);
 
     const defaultMove = new Movements(bot);
@@ -645,7 +649,16 @@ function createBot() {
     const reasonStr = describeDisconnectReason(reason);
     logSystem(`[Bot Kicked] ${reasonStr}`);
     botStatus = `Kicked: ${reasonStr}`;
-    scheduleReconnect(RECONNECT_DELAY_MS);
+    reconnectAttempts++;
+    const lc = reasonStr.toLowerCase();
+    let delay;
+    if (lc.includes('throttl') || lc.includes('too many') || lc.includes('please wait')) {
+      delay = THROTTLE_RECONNECT_DELAY_MS;
+      logSystem(`[Reconnect] Server throttle detected — waiting ${delay / 1000}s before retry.`);
+    } else {
+      delay = Math.min(RECONNECT_DELAY_MS * Math.pow(1.5, reconnectAttempts - 1), MAX_RECONNECT_DELAY_MS);
+    }
+    scheduleReconnect(delay);
   });
 
   bot.on('error', (err) => {
@@ -655,10 +668,18 @@ function createBot() {
   bot.on('end', (reason) => {
     botStatus = 'disconnected';
     const desc = describeDisconnectReason(reason);
-    const delay = desc.toLowerCase().includes('duplicate_login')
-      ? DUPLICATE_LOGIN_RECONNECT_DELAY_MS
-      : RECONNECT_DELAY_MS;
-    logSystem(`[Bot Disconnected] Reason: ${desc}. Reconnecting in ${delay / 1000}s...`);
+    reconnectAttempts++;
+    const lc = desc.toLowerCase();
+    let delay;
+    if (lc.includes('throttl') || lc.includes('too many') || lc.includes('please wait')) {
+      delay = THROTTLE_RECONNECT_DELAY_MS;
+      logSystem(`[Reconnect] Throttle/flood detected — waiting ${delay / 1000}s before retry.`);
+    } else if (lc.includes('duplicate_login')) {
+      delay = DUPLICATE_LOGIN_RECONNECT_DELAY_MS;
+    } else {
+      delay = Math.min(RECONNECT_DELAY_MS * Math.pow(1.5, Math.max(0, reconnectAttempts - 1)), MAX_RECONNECT_DELAY_MS);
+    }
+    logSystem(`[Bot Disconnected] Reason: ${desc}. Reconnecting in ${(delay / 1000).toFixed(0)}s... (attempt #${reconnectAttempts})`);
     scheduleReconnect(delay);
   });
 }
@@ -679,6 +700,7 @@ function describeDisconnectReason(reason) {
 
 function scheduleReconnect(delayMs) {
   if (reconnectTimer) return;
+  logSystem(`[Reconnect] Next attempt in ${(delayMs / 1000).toFixed(0)}s...`);
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
     createBot();
