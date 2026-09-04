@@ -580,7 +580,13 @@ function createBot() {
     reconnectAttempts = 0; // reset backoff on successful connection
     logSystem(`[Bot] ✅ ${BOT_USERNAME} spawned successfully into Minecraft world!`);
 
-    const defaultMove = new Movements(bot);
+    const mcData = require('minecraft-data')(bot.version || '1.21.4');
+    const defaultMove = new Movements(bot, mcData);
+    defaultMove.canDig = false;
+    defaultMove.allow1by1towers = true;
+    defaultMove.allowParkour = true;
+    defaultMove.allowSprinting = true;
+    defaultMove.maxDropDown = 4;
     bot.pathfinder.setMovements(defaultMove);
 
     // Register with Swarm Manager and start 24/7 supervisor
@@ -938,7 +944,10 @@ async function runSchematicBuild(requester, name, coordInfo = { origin: null, ro
     return;
   }
 
-  safeChat(`/gamemode creative ${BOT_USERNAME}`);
+  if (bot.game?.gameMode !== 'creative') {
+    safeChat(`/gamemode creative ${BOT_USERNAME}`);
+    safeChat(`[Builder] ⚠ Notice: If I am in Survival mode, please run: /gamemode creative ${BOT_USERNAME} so I can synthesize deepslate & farm blocks!`);
+  }
   builder.setJob(name);
   const origin = resolveOrigin(requester, coordInfo.origin);
   const workforce = swarm.getWorkerCount();

@@ -47,12 +47,6 @@ const REPLACEABLE_BLOCKS = new Set([
 
 /**
  * High-performance, resilient builder engine for Mineflayer bots.
- * Features:
- * - Robust placement with network-friendly timeouts (4500ms)
- * - True Anti-Self-Collision: steps away from target block in both survival and creative
- * - Safe obstacle clearing for grass, flowers, and natural blocks
- * - Creative item provisioning + survival inventory fallback
- * - Max retry backoff per block to prevent infinite hand-waving loops
  */
 class Builder {
   constructor(bot, { blockName = 'cobblestone', placeDelayMs = 120, scaffoldBlock = 'dirt' } = {}) {
@@ -67,6 +61,7 @@ class Builder {
     this.building = false;
     this.cancelled = false;
     this.currentJob = { name: 'None', total: 0, placed: 0, startTime: 0 };
+    this._warnedGamemode = false;
   }
 
   setJob(name) {
@@ -124,6 +119,8 @@ class Builder {
     this.cancelled = true;
     this.queue = [];
     this.building = false;
+    this.currentJob = { name: 'None', total: 0, placed: 0, startTime: 0 };
+    this._warnedGamemode = false;
     try {
       if (this.bot.pathfinder) {
         this.bot.pathfinder.stop();
@@ -138,6 +135,7 @@ class Builder {
     }
     this.building = true;
     this.cancelled = false;
+    this._warnedGamemode = false;
 
     const total = this.queue.length;
     this.currentJob.total = total;
@@ -222,11 +220,11 @@ class Builder {
     }
     const { refPos, faceVector } = referenceInfo;
 
-    // 4. Move to safe placing position: NOT colliding with target.pos, AND within reach of refPos (2-3.5 blocks)
+    // 4. Move to safe placing position: NOT colliding with target.pos, AND strictly within reach of refPos (<= 4.2 blocks)
     await this._moveToPosition(target.pos, refPos);
 
-    // 5. Creative Mode Item Provisioning: Synthesize the exact matching item stack
-    if (bot.creative && typeof bot.creative.setInventorySlot === 'function') {
+    // 5. Creative Mode Item Provisioning
+    if (bot.game?.gameMode === 'creative' && bot.creative && typeof bot.creative.setInventorySlot === 'function') {
       try {
         const mcData = require('minecraft-data')(bot.version || '1.21.4');
         const itemEntry = mcData?.itemsByName[itemName] || mcData?.blocksByName[targetBlockName];
@@ -237,6 +235,7 @@ class Builder {
       } catch (e) {}
     }
 
+    // Find the matching item
     let item = bot.inventory.items().find((i) => i.name === itemName || i.name === targetBlockName);
     if (!item) {
       item = bot.inventory.items().find((i) =>
@@ -244,11 +243,14 @@ class Builder {
         (targetBlockName.includes('deepslate') && i.name.includes('deepslate'))
       );
     }
-    if (!item && bot.heldItem && bot.heldItem.name) {
-      item = bot.heldItem;
-    }
 
     if (!item) {
+      if (bot.game?.gameMode !== 'creative') {
+        if (typeof bot.chat === 'function' && !this._warnedGamemode) {
+          this._warnedGamemode = true;
+          bot.chat(`[Builder] ⚠ I am in Survival mode and missing "${itemName}"! Please run: /gamemode creative ${bot.username}`);
+        }
+      }
       throw new Error(`Out of material: ${itemName} (for ${targetBlockName})`);
     }
 
@@ -297,7 +299,6 @@ class Builder {
     const distToRef = currentPos.distanceTo(refPos);
 
     // 1. Anti-collision: Ensure bot's bounding box does NOT overlap targetPos
-    // Minecraft player hitbox is 0.6x0.6 horizontal, 1.8 height.
     const isColliding = Math.abs(currentPos.x - (targetPos.x + 0.5)) < 0.9 &&
                         Math.abs(currentPos.z - (targetPos.z + 0.5)) < 0.9 &&
                         currentPos.y <= (targetPos.y + 1.2) &&
@@ -308,7 +309,7 @@ class Builder {
       const dz = currentPos.z >= targetPos.z + 0.5 ? 2.0 : -2.0;
       const safePos = new Vec3(targetPos.x + 0.5 + dx, Math.max(targetPos.y, currentPos.y), targetPos.z + 0.5 + dz);
 
-      if (bot.creative && typeof bot.creative.flyTo === 'function') {
+      if (bot.game?.gameMode === 'creative' && bot.creative && typeof bot.creative.flyTo === 'function') {
         try { await withTimeout(bot.creative.flyTo(safePos), 1000); } catch (e) {}
       } else if (bot.pathfinder) {
         try {
@@ -325,7 +326,7 @@ class Builder {
       const standZ = refPos.z + (refPos.z > (bot.entity?.position.z || 0) ? -1.8 : 1.8);
       const standY = refPos.y;
 
-      if (bot.creative && typeof bot.creative.flyTo === 'function') {
+      if (bot.game?.gameMode === 'creative' && bot.creative && typeof bot.creative.flyTo === 'function') {
         try { await withTimeout(bot.creative.flyTo(new Vec3(standX, standY + 1.0, standZ)), 1200); } catch (e) {}
       } else if (bot.pathfinder) {
         try {
@@ -333,6 +334,12 @@ class Builder {
           await withTimeout(bot.pathfinder.goto(new goals.GoalNear(refPos.x, refPos.y, refPos.z, 2.5)), 3500);
         } catch (e) {}
       }
+    }
+
+    // 3. Strict Reach Guard: Never attempt placeBlock if out of reach!
+    const finalDist = bot.entity ? bot.entity.position.distanceTo(refPos) : 999;
+    if (finalDist > 4.2) {
+      throw new Error(`Out of reach: distance to reference block is ${finalDist.toFixed(1)} blocks (max 4.2)`);
     }
   }
 
@@ -379,7 +386,7 @@ class Builder {
       return null;
     }
 
-    if (bot.creative && typeof bot.creative.setInventorySlot === 'function') {
+    if (bot.game?.gameMode === 'creative' && bot.creative && typeof bot.creative.setInventorySlot === 'function') {
       try {
         const Item = require('prismarine-item')(bot.version || '1.21.4');
         await bot.creative.setInventorySlot(36, new Item(1, 64)); // stone

@@ -241,7 +241,13 @@ class SwarmManager {
           entry.throttleKicked = false;
           console.log(`[Swarm] ✅ ${username} spawned successfully in world!`);
 
-          const defaultMove = new Movements(bot);
+          const mcData = require('minecraft-data')(bot.version || '1.21.4');
+          const defaultMove = new Movements(bot, mcData);
+          defaultMove.canDig = false;
+          defaultMove.allow1by1towers = true;
+          defaultMove.allowParkour = true;
+          defaultMove.allowSprinting = true;
+          defaultMove.maxDropDown = 4;
           bot.pathfinder.setMovements(defaultMove);
 
           // Auto-Auth sequence
@@ -423,13 +429,26 @@ class SwarmManager {
     }
   }
 
-  /**
-   * Partitions the block queue across all active swarm workers and builds in parallel.
-   */
   async buildParallel(mainBuilder, blocks, origin, onProgress) {
-    const activeWorkers = Array.from(this.workers.values()).filter(
-      (w) => w.connected && w.builder && w.bot && w.bot.entity
+    const activeWorkers = Array.from(this.workers.values()).filter((w) => {
+      if (!w.connected || !w.builder || !w.bot || !w.bot.entity) return false;
+      const dist = w.bot.entity.position.distanceTo(origin);
+      if (dist > 64) {
+        console.log(`[Swarm] Worker ${w.username} is ${dist.toFixed(0)}m away from build site. Skipping from this build.`);
+        return false;
+      }
+      return true;
+    });
+
+    const farWorkers = Array.from(this.workers.values()).filter(
+      (w) => w.connected && w.bot?.entity && w.bot.entity.position.distanceTo(origin) > 64
     );
+    if (farWorkers.length > 0 && this.mainBot && typeof this.mainBot.chat === 'function') {
+      try {
+        this.mainBot.chat(`[Swarm] ⚠ Note: ${farWorkers.length} worker bots are far away! Run: /tp @e[type=player,name=BuilderBot*] ~ ~ ~ to bring fleet.`);
+      } catch (_) {}
+    }
+
     const totalWorkers = 1 + activeWorkers.length;
 
     if (totalWorkers === 1) {
