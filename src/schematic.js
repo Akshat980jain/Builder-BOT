@@ -90,8 +90,59 @@ function rotateProperties(properties, rotation) {
 }
 
 // ---------------------------------------------------------------------------
-// Litematic parsing with Coordinate Normalization
+// Finalize Blocks: Normalization, Rotation & Bottom-to-Top Sorting
 // ---------------------------------------------------------------------------
+
+function finalizeBlocks(rawBlocks, rotation = 0) {
+  if (rawBlocks.length === 0) return [];
+
+  // 1. Initial normalization
+  let minX = Infinity, minY = Infinity, minZ = Infinity;
+  for (const b of rawBlocks) {
+    if (b.pos.x < minX) minX = b.pos.x;
+    if (b.pos.y < minY) minY = b.pos.y;
+    if (b.pos.z < minZ) minZ = b.pos.z;
+  }
+
+  const rotatedList = [];
+  for (const b of rawBlocks) {
+    const normalized = new Vec3(b.pos.x - minX, b.pos.y - minY, b.pos.z - minZ);
+    const rotatedOffset = rotateOffset(normalized, rotation);
+    const rotatedProps = rotateProperties(b.properties, rotation);
+    rotatedList.push({
+      pos: rotatedOffset,
+      name: b.name,
+      properties: rotatedProps ?? {},
+    });
+  }
+
+  // 2. Re-normalize after rotation so all coordinates are >= 0 with minY = 0
+  let rMinX = Infinity, rMinY = Infinity, rMinZ = Infinity;
+  for (const b of rotatedList) {
+    if (b.pos.x < rMinX) rMinX = b.pos.x;
+    if (b.pos.y < rMinY) rMinY = b.pos.y;
+    if (b.pos.z < rMinZ) rMinZ = b.pos.z;
+  }
+
+  const finalBlocks = [];
+  for (const b of rotatedList) {
+    finalBlocks.push({
+      pos: new Vec3(b.pos.x - rMinX, b.pos.y - rMinY, b.pos.z - rMinZ),
+      name: b.name,
+      properties: b.properties,
+    });
+  }
+
+  // 3. CRITICAL: Sort strictly bottom-to-top (ascending Y)
+  // This ensures layer 0 is placed first, so higher blocks have ground/support underneath!
+  finalBlocks.sort((a, b) => {
+    if (a.pos.y !== b.pos.y) return a.pos.y - b.pos.y;
+    if (a.pos.z !== b.pos.z) return a.pos.z - b.pos.z;
+    return a.pos.x - b.pos.x;
+  });
+
+  return finalBlocks;
+}
 
 function parseLitematicBlocks(simplifiedNbt, rotation = 0) {
   const regions = simplifiedNbt.Regions ?? {};
@@ -137,30 +188,7 @@ function parseLitematicBlocks(simplifiedNbt, rotation = 0) {
     }
   }
 
-  if (rawBlocks.length === 0) return [];
-
-  // Normalize so the lowest coordinate starts at (0, 0, 0)
-  let minX = Infinity, minY = Infinity, minZ = Infinity;
-  for (const b of rawBlocks) {
-    if (b.pos.x < minX) minX = b.pos.x;
-    if (b.pos.y < minY) minY = b.pos.y;
-    if (b.pos.z < minZ) minZ = b.pos.z;
-  }
-
-  const blocks = [];
-  for (const b of rawBlocks) {
-    const normalized = new Vec3(b.pos.x - minX, b.pos.y - minY, b.pos.z - minZ);
-    const rotatedOffset = rotateOffset(normalized, rotation);
-    const rotatedProps = rotateProperties(b.properties, rotation);
-
-    blocks.push({
-      pos: rotatedOffset,
-      name: b.name,
-      properties: rotatedProps ?? {},
-    });
-  }
-
-  return blocks;
+  return finalizeBlocks(rawBlocks, rotation);
 }
 
 function parseStructureNbtBlocks(simplifiedNbt, rotation = 0) {
@@ -176,24 +204,42 @@ function parseStructureNbtBlocks(simplifiedNbt, rotation = 0) {
     rawBlocks.push({ pos: new Vec3(x, y, z), name: entry.Name, properties: entry.Properties ?? {} });
   }
 
-  if (rawBlocks.length === 0) return [];
+  return finalizeBlocks(rawBlocks, rotation);
+}
 
-  let minX = Infinity, minY = Infinity, minZ = Infinity;
-  for (const b of rawBlocks) {
-    if (b.pos.x < minX) minX = b.pos.x;
-    if (b.pos.y < minY) minY = b.pos.y;
-    if (b.pos.z < minZ) minZ = b.pos.z;
+// Legacy MCEdit .schematic format parser
+function parseLegacySchematicBlocks(simplifiedNbt, rotation = 0) {
+  const width = simplifiedNbt.Width;
+  const height = simplifiedNbt.Height;
+  const length = simplifiedNbt.Length;
+  const blocks = simplifiedNbt.Blocks;
+  if (!blocks || !width || !height || !length) return [];
+
+  let mcData;
+  try { mcData = require('minecraft-data')('1.12.2'); } catch (_) {}
+
+  const rawBlocks = [];
+  for (let y = 0; y < height; y++) {
+    for (let z = 0; z < length; z++) {
+      for (let x = 0; x < width; x++) {
+        const index = (y * length + z) * width + x;
+        const id = blocks[index] & 0xff;
+        if (id === 0) continue; // Air
+
+        let blockName = 'minecraft:stone';
+        if (mcData && mcData.blocks[id]) {
+          blockName = 'minecraft:' + mcData.blocks[id].name;
+        }
+        rawBlocks.push({
+          pos: new Vec3(x, y, z),
+          name: blockName,
+          properties: {},
+        });
+      }
+    }
   }
 
-  const blocks = [];
-  for (const b of rawBlocks) {
-    const normalized = new Vec3(b.pos.x - minX, b.pos.y - minY, b.pos.z - minZ);
-    const rotatedOffset = rotateOffset(normalized, rotation);
-    const rotatedProps = rotateProperties(b.properties, rotation);
-    blocks.push({ pos: rotatedOffset, name: b.name, properties: rotatedProps ?? {} });
-  }
-
-  return blocks;
+  return finalizeBlocks(rawBlocks, rotation);
 }
 
 module.exports = {
@@ -203,4 +249,7 @@ module.exports = {
   rotateProperties,
   parseLitematicBlocks,
   parseStructureNbtBlocks,
+  parseLegacySchematicBlocks,
+  finalizeBlocks,
 };
+

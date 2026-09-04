@@ -605,7 +605,18 @@ public class BuilderBotScreen extends Screen {
                     conn.sendChat("!come");
                 } else if (command.contains("schematic ")) {
                     String name = command.substring(command.indexOf("schematic ") + "schematic ".length()).trim();
-                    conn.sendChat("!schematic " + name);
+                    if (command.contains("swarm ") && selectedBotCount > 1) {
+                        conn.sendChat("!schematic swarm " + selectedBotCount + " " + name);
+                    } else {
+                        conn.sendChat("!schematic " + name);
+                    }
+                } else if (command.contains(" build ")) {
+                    String name = command.substring(command.indexOf(" build ") + " build ".length()).trim();
+                    if (command.contains("swarm ") && selectedBotCount > 1) {
+                        conn.sendChat("!schematic swarm " + selectedBotCount + " " + name);
+                    } else {
+                        conn.sendChat("!schematic " + name);
+                    }
                 } else if (command.equals("builderbot fly")) {
                     conn.sendChat("!status");
                 }

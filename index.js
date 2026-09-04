@@ -41,7 +41,7 @@ const { SwarmManager } = require('./src/swarm');
 const { installChatCompat } = require('./src/chatCompat');
 const { installFabricSpoof } = require('./src/fabricSpoof');
 const { installPacketDebugger } = require('./src/debugPackets');
-const { parseLitematicBlocks, parseStructureNbtBlocks } = require('./src/schematic');
+const { parseLitematicBlocks, parseStructureNbtBlocks, parseLegacySchematicBlocks } = require('./src/schematic');
 
 // ---------------------------------------------------------------------------
 // Configuration Resolution
@@ -134,9 +134,9 @@ app.post('/api/swarm/stop', (req, res) => {
 });
 
 app.post('/api/build/shape', async (req, res) => {
-  const { shape, size = 5, r = 6, h = 10, w = 3 } = req.body;
-  if (!builder || builder.isBuilding()) {
-    return res.status(400).json({ error: 'Builder is busy or not connected' });
+  const { shape, size = 5, r = 6, h = 10 } = req.body;
+  if (!builder) {
+    return res.status(400).json({ error: 'Builder is not connected' });
   }
 
   let offsets;
@@ -144,13 +144,67 @@ app.post('/api/build/shape', async (req, res) => {
   if (shape === 'pyramid') offsets = pyramid(Number(size));
   else if (shape === 'dome') offsets = dome(Number(r));
   else if (shape === 'tower') offsets = tower(Number(r), Number(h));
-  else offsets = pyramid(5);
+  else {
+    return res.status(400).json({ error: `Unknown shape: "${shape}". Valid shapes: pyramid, dome, tower.` });
+  }
+
+  if (builder.isBuilding()) {
+    logSystem(`[Build] Cancelling previous build to start new shape "${name}"`);
+    builder.cancel();
+    if (swarm) swarm.cancelAll();
+    await new Promise((r) => setTimeout(r, 300));
+  }
 
   const origin = bot?.entity ? bot.entity.position.floored() : new Vec3(0, 64, 0);
   builder.setJob(name);
   executeBuild(offsets, origin);
   res.json({ ok: true, message: `Building ${name} with ${offsets.length} blocks...` });
 });
+
+app.get('/api/schematics', (req, res) => {
+  const files = listSchematicFiles();
+  res.json({
+    schematics: files.map((f, i) => ({
+      index: i + 1,
+      filename: f,
+      name: f.replace(/\.(litematic|nbt|schematic)$/i, '')
+    }))
+  });
+});
+
+app.post('/api/build/schematic', async (req, res) => {
+  const { name, origin, rotation = 0, swarmCount } = req.body;
+  if (!name) {
+    return res.status(400).json({ error: 'Missing schematic name' });
+  }
+  if (!builder) {
+    return res.status(400).json({ error: 'Builder is not connected' });
+  }
+
+  if (swarmCount && Number(swarmCount) > 1 && swarm) {
+    await swarm.setWorkerCount(Number(swarmCount));
+  }
+
+  let explicitOrigin = null;
+  if (origin && typeof origin.x === 'number' && typeof origin.y === 'number' && typeof origin.z === 'number') {
+    explicitOrigin = new Vec3(Number(origin.x), Number(origin.y), Number(origin.z));
+  }
+
+  runSchematicBuild('WebUser', name, { origin: explicitOrigin, rotation: Number(rotation) || 0 });
+  res.json({ ok: true, message: `Dispatched schematic build for "${name}"` });
+});
+
+app.post('/api/command', async (req, res) => {
+  const { command } = req.body;
+  if (!command || typeof command !== 'string') {
+    return res.status(400).json({ error: 'Missing command' });
+  }
+  logSystem(`[Web Console] Executing: ${command}`);
+  const clean = command.trim().startsWith('!') ? command.trim() : '!' + command.trim();
+  handleChatLine('WebConsole', clean);
+  res.json({ ok: true, message: `Command executed: ${clean}` });
+});
+
 
 app.get('/api/status', (req, res) => {
   const pos = bot?.entity ? bot.entity.position.floored() : null;
@@ -312,18 +366,43 @@ app.get('/', (req, res) => {
     <div id="tab-builder" class="tab-content">
       <div class="grid-2">
         <div class="card">
+          <h2>📁 Build from Schematic (Choose from Options)</h2>
+          <p style="color: var(--text-muted); font-size: 13px; margin-bottom: 12px;">Select any loaded schematic to build collaboratively with your bot workforce:</p>
+          <div style="margin-bottom: 12px;">
+            <label style="display:block; font-size: 12px; color: var(--text-muted); margin-bottom: 4px;">Schematic Options:</label>
+            <select id="schematicSelect" style="width: 100%; background: rgba(0,0,0,0.5); border: 1px solid var(--border); color: #fff; padding: 10px 12px; border-radius: 8px; font-family: inherit; font-size: 14px;">
+              <option value="">Loading schematics...</option>
+            </select>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px;">
+            <div>
+              <label style="display:block; font-size: 12px; color: var(--text-muted); margin-bottom: 4px;">Rotation:</label>
+              <select id="schematicRot" style="width: 100%; background: rgba(0,0,0,0.5); border: 1px solid var(--border); color: #fff; padding: 8px; border-radius: 8px;">
+                <option value="0">0° (Default)</option>
+                <option value="90">90° Clockwise</option>
+                <option value="180">180° Half Turn</option>
+                <option value="270">270° Counter-CW</option>
+              </select>
+            </div>
+            <div>
+              <label style="display:block; font-size: 12px; color: var(--text-muted); margin-bottom: 4px;">Workers (1..10):</label>
+              <input id="schematicWorkers" type="number" min="1" max="10" value="3" style="width: 100%; background: rgba(0,0,0,0.5); border: 1px solid var(--border); color: #fff; padding: 8px; border-radius: 8px;">
+            </div>
+          </div>
+          <button class="cmd-btn" style="width: 100%; background: var(--accent); color: #000; font-weight: 800;" onclick="buildSelectedSchematic()">🏗️ Build Selected Schematic</button>
+        </div>
+
+        <div class="card">
           <h2>🏛️ Quick Geometric Shapes</h2>
           <p style="color: var(--text-muted); font-size: 13px; margin-bottom: 16px;">Build structures in parallel with all active swarm bots:</p>
-          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px;">
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-bottom: 16px;">
             <button class="cmd-btn" onclick="buildShape('pyramid', 7)">▲ Pyramid (7x7)</button>
             <button class="cmd-btn" onclick="buildShape('dome', 6)">● Dome (r=6)</button>
             <button class="cmd-btn" onclick="buildShape('tower', 2, 12)">🗼 Tower (h=12)</button>
           </div>
-        </div>
-        <div class="card">
-          <h2>📁 Upload Schematic (.litematic / .nbt)</h2>
-          <input type="file" id="schemFile" accept=".litematic,.nbt,.schem" style="margin-bottom: 12px; color: var(--text-muted);">
-          <button class="cmd-btn" onclick="uploadSchematic()">Upload Schematic</button>
+          <h2>📁 Upload New Schematic</h2>
+          <input type="file" id="schemFile" accept=".litematic,.nbt,.schematic,.schem" style="margin-bottom: 12px; color: var(--text-muted); width: 100%;">
+          <button class="cmd-btn" style="background: rgba(255,255,255,0.1); color: #fff;" onclick="uploadSchematic()">Upload to Server</button>
         </div>
       </div>
     </div>
@@ -353,6 +432,7 @@ app.get('/', (req, res) => {
       } else if (tab === 'builder') {
         document.getElementById('btn-tab-builder').classList.add('active');
         document.getElementById('tab-builder').classList.add('active');
+        loadSchematicsList();
       } else {
         document.getElementById('btn-tab-console').classList.add('active');
         document.getElementById('tab-console').classList.add('active');
@@ -451,15 +531,70 @@ app.get('/', (req, res) => {
       alert('Dispatched ' + shape + ' build to swarm fleet!');
     }
 
+    async function loadSchematicsList() {
+      try {
+        const res = await fetch('/api/schematics');
+        const data = await res.json();
+        const sel = document.getElementById('schematicSelect');
+        if (!sel) return;
+        if (!data.schematics || data.schematics.length === 0) {
+          sel.innerHTML = '<option value="">No schematics found on server</option>';
+          return;
+        }
+        sel.innerHTML = data.schematics.map(s => '<option value="' + s.filename + '">' + s.index + ': ' + s.name + ' (' + s.filename.split('.').pop() + ')</option>').join('');
+      } catch (_) {}
+    }
+
+    async function buildSelectedSchematic() {
+      const sel = document.getElementById('schematicSelect');
+      const filename = sel ? sel.value : null;
+      if (!filename) {
+        alert('Please choose a schematic from the options list!');
+        return;
+      }
+      const rot = parseInt(document.getElementById('schematicRot')?.value || '0', 10);
+      const workers = parseInt(document.getElementById('schematicWorkers')?.value || '3', 10);
+
+      const res = await fetch('/api/build/schematic', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: filename, rotation: rot, swarmCount: workers })
+      });
+      const data = await res.json();
+      alert(data.message || 'Build started!');
+    }
+
+    async function uploadSchematic() {
+      const fileInput = document.getElementById('schemFile');
+      if (!fileInput.files || fileInput.files.length === 0) {
+        alert('Please choose a file to upload.');
+        return;
+      }
+      const formData = new FormData();
+      formData.append('schematic', fileInput.files[0]);
+      const res = await fetch('/schematics/upload', {
+        method: 'POST',
+        body: formData,
+      });
+      const data = await res.json();
+      alert(data.message || 'Upload complete!');
+      loadSchematicsList();
+    }
+
     async function executeCommand() {
       const input = document.getElementById('cmdInput');
       const val = input.value.trim();
       if (!val) return;
       input.value = '';
-      if (typeof handleChatLine === 'function') {
-        // Will send via in-game or log
-      }
+      try {
+        await fetch('/api/command', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ command: val })
+        });
+      } catch (_) {}
     }
+
 
     setInterval(updateDashboard, 2000);
     setInterval(updateFleetStatus, 2500);
@@ -476,17 +611,50 @@ app.listen(HTTP_PORT, () => {
 });
 
 // ---------------------------------------------------------------------------
-// Schematic Loader
+// Schematic Loader & Directory Discovery
 // ---------------------------------------------------------------------------
-async function loadSchematicBlocks(name, rotation = 0) {
-  const cleanName = name.replace(/[\s._-]+/g, '').toLowerCase();
-  const files = fs.readdirSync(SCHEMATICS_DIR);
+function listSchematicFiles() {
+  if (!fs.existsSync(SCHEMATICS_DIR)) return [];
+  return fs.readdirSync(SCHEMATICS_DIR)
+    .filter((f) => f.endsWith('.litematic') || f.endsWith('.nbt') || f.endsWith('.schematic'))
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
+}
 
-  let match = files.find((f) => f.toLowerCase() === name.toLowerCase());
+async function loadSchematicBlocks(name, rotation = 0) {
+  const files = listSchematicFiles();
+  let match = null;
+
+  const trimmed = String(name || '').trim();
+  if (!trimmed) return null;
+
+  // 1. Check if name is a 1-based index (e.g. "1", "2", "4" from options list)
+  if (/^\d+$/.test(trimmed)) {
+    const idx = parseInt(trimmed, 10) - 1;
+    if (idx >= 0 && idx < files.length) {
+      match = files[idx];
+    }
+  }
+
+  // 2. Exact match (case-insensitive)
+  if (!match) {
+    match = files.find((f) => f.toLowerCase() === trimmed.toLowerCase());
+  }
+
+  // 3. Exact match without extension
   if (!match) {
     match = files.find((f) => {
-      const c = f.replace(/[\s._-]+/g, '').toLowerCase();
-      return c.includes(cleanName) || cleanName.includes(c);
+      const baseName = f.replace(/\.(litematic|nbt|schematic)$/i, '');
+      return baseName.toLowerCase() === trimmed.toLowerCase();
+    });
+  }
+
+  // 4. Fuzzy match: spaces, dashes, underscores stripped
+  if (!match) {
+    const cleanQuery = trimmed.replace(/[\s._-]+/g, '').toLowerCase();
+    match = files.find((f) => {
+      const cleanF = f.replace(/[\s._-]+/g, '').toLowerCase();
+      const cleanBase = f.replace(/\.(litematic|nbt|schematic)$/i, '').replace(/[\s._-]+/g, '').toLowerCase();
+      return cleanF.includes(cleanQuery) || cleanQuery.includes(cleanBase) || cleanBase.includes(cleanQuery);
     });
   }
 
@@ -500,6 +668,8 @@ async function loadSchematicBlocks(name, rotation = 0) {
 
   if (filePath.endsWith('.litematic')) {
     return parseLitematicBlocks(simplified, rotation);
+  } else if (filePath.endsWith('.schematic')) {
+    return parseLegacySchematicBlocks(simplified, rotation);
   }
   return parseStructureNbtBlocks(simplified, rotation);
 }
@@ -779,7 +949,9 @@ function resolveOrigin(requester, explicitOrigin) {
     const yaw = bot.entity.yaw || 0;
     const fx = Math.round(-Math.sin(yaw) * 4);
     const fz = Math.round(Math.cos(yaw) * 4);
-    return bot.entity.position.floored().offset(fx, 0, fz);
+    const bPos = bot.entity.position.floored().offset(fx, 0, fz);
+    safeChat(`[Builder] Notice: Player "${requester}" is not nearby. Building at bot's location (${bPos.x}, ${bPos.y}, ${bPos.z}). Use !come to bring me to you!`);
+    return bPos;
   }
   return new Vec3(0, 64, 0);
 }
@@ -790,9 +962,15 @@ function parseSchematicCommand(args) {
   const nameTokens = [...args];
 
   let swarmCount = null;
-  if (nameTokens[0] === 'swarm' && /^\d+$/.test(nameTokens[1])) {
+  // Check if 'swarm <count>' is at the start
+  if (nameTokens.length >= 2 && nameTokens[0].toLowerCase() === 'swarm' && /^\d+$/.test(nameTokens[1])) {
     nameTokens.shift();
     swarmCount = parseInt(nameTokens.shift(), 10);
+  }
+  // Check if 'swarm <count>' is at the end
+  if (nameTokens.length >= 2 && nameTokens[nameTokens.length - 2].toLowerCase() === 'swarm' && /^\d+$/.test(nameTokens[nameTokens.length - 1])) {
+    swarmCount = parseInt(nameTokens.pop(), 10);
+    nameTokens.pop();
   }
 
   if (
@@ -857,26 +1035,69 @@ async function handleChatLine(username, text) {
       safeChat(`[Swarm] Active Bots (${list.length}/10): ` + list.map((b) => `${b.username} [${b.state}]`).join(' | '));
       return;
     }
-    case 'pyramid':
+    case 'pyramid': {
       const pyrSize = parseInt(args[0], 10) || 5;
       return runBuild(username, pyramid(pyrSize), parseCoordsAndRotation(args.slice(1)), `Pyramid (${pyrSize}x${pyrSize})`);
-    case 'dome':
+    }
+    case 'dome': {
       const domeR = parseInt(args[0], 10) || 6;
       return runBuild(username, dome(domeR), parseCoordsAndRotation(args.slice(1)), `Dome (r=${domeR})`);
-    case 'tower':
+    }
+    case 'tower': {
       const tR = parseInt(args[0], 10) || 2;
       const tH = parseInt(args[1], 10) || 10;
       return runBuild(username, tower(tR, tH), parseCoordsAndRotation(args.slice(2)), `Tower (r=${tR}, h=${tH})`);
-    case 'stairs':
+    }
+    case 'stairs': {
       const sW = parseInt(args[0], 10) || 3;
       const sH = parseInt(args[1], 10) || 12;
       return runBuild(username, tower(sW, sH), parseCoordsAndRotation(args.slice(2)), `Staircase (w=${sW}, h=${sH})`);
-    case 'schematic':
+    }
+    case 'schematics':
+    case 'schematic': {
+      if (args.length === 0 || args[0].toLowerCase() === 'list' || args[0].toLowerCase() === 'options' || args[0].toLowerCase() === 'help') {
+        const files = listSchematicFiles();
+        if (files.length === 0) {
+          safeChat('[Schematics] No schematics found on server. Upload via web dashboard (:10000).');
+          return;
+        }
+        const summary = files.map((f, i) => `${i + 1}: ${f.replace(/\.(litematic|nbt|schematic)$/i, '')}`).join(' | ');
+        safeChat(`[Schematic Options] ${summary}`);
+        safeChat(`[BuilderBot] Choose an option: !schematic <number|name> (e.g. !schematic 4 or !schematic deepslate)`);
+        return;
+      }
       const parsed = parseSchematicCommand(args);
       if (parsed.swarmCount && parsed.swarmCount > 1) {
         await swarm.setWorkerCount(parsed.swarmCount);
       }
       return runSchematicBuild(username, parsed.name, parsed.coordInfo);
+    }
+    case 'build': {
+      if (args.length === 0) {
+        const files = listSchematicFiles();
+        const summary = files.map((f, i) => `${i + 1}: ${f.replace(/\.(litematic|nbt|schematic)$/i, '')}`).join(' | ');
+        safeChat(`[Build Options] Schematics: ${summary}. Or shapes: pyramid, dome, tower. Use: !build <number|name>`);
+        return;
+      }
+      const target = args[0].toLowerCase();
+      if (target === 'pyramid') {
+        const pyrSize = parseInt(args[1], 10) || 5;
+        return runBuild(username, pyramid(pyrSize), parseCoordsAndRotation(args.slice(2)), `Pyramid (${pyrSize}x${pyrSize})`);
+      } else if (target === 'dome') {
+        const domeR = parseInt(args[1], 10) || 6;
+        return runBuild(username, dome(domeR), parseCoordsAndRotation(args.slice(2)), `Dome (r=${domeR})`);
+      } else if (target === 'tower') {
+        const tR = parseInt(args[1], 10) || 2;
+        const tH = parseInt(args[2], 10) || 10;
+        return runBuild(username, tower(tR, tH), parseCoordsAndRotation(args.slice(3)), `Tower (r=${tR}, h=${tH})`);
+      } else {
+        const parsed = parseSchematicCommand(args);
+        if (parsed.swarmCount && parsed.swarmCount > 1) {
+          await swarm.setWorkerCount(parsed.swarmCount);
+        }
+        return runSchematicBuild(username, parsed.name, parsed.coordInfo);
+      }
+    }
     case 'come':
       return comeToPlayer(username);
     case 'undo':
@@ -898,7 +1119,7 @@ async function handleChatLine(username, text) {
       return;
     }
     case 'help':
-      safeChat('[Commands] !spawn 10, !reconnect <id>, !bots, !schematic <name>, !pyramid <size>, !dome <r>, !tower <r> <h>, !status, !come, !undo, !stop');
+      safeChat('[Commands] !schematic <number|name>, !schematics (list options), !build <name>, !spawn 10, !pyramid <size>, !dome <r>, !tower <r> <h>, !status, !come, !undo, !stop');
       return;
     default:
       return;
@@ -907,8 +1128,10 @@ async function handleChatLine(username, text) {
 
 async function runBuild(requester, offsets, coordInfo = { origin: null, rotation: 0 }, shapeName = 'Structure') {
   if (builder.isBuilding()) {
-    safeChat(`Already building — send !stop first, ${requester}.`);
-    return;
+    safeChat(`[Builder] Cancelling previous build to start "${shapeName}"...`);
+    builder.cancel();
+    if (swarm) swarm.cancelAll();
+    await new Promise((r) => setTimeout(r, 400));
   }
   safeChat(`/gamemode creative ${BOT_USERNAME}`);
   builder.setJob(shapeName);
@@ -919,11 +1142,7 @@ async function runBuild(requester, offsets, coordInfo = { origin: null, rotation
 
 async function runSchematicBuild(requester, name, coordInfo = { origin: null, rotation: 0 }) {
   if (!name) {
-    safeChat('Usage: !schematic <name> [x y z] [rotation 0|90|180|270]');
-    return;
-  }
-  if (builder.isBuilding()) {
-    safeChat(`Already building — send !stop first, ${requester}.`);
+    safeChat('Usage: !schematic <number|name> [x y z] [rotation 0|90|180|270]');
     return;
   }
 
@@ -936,12 +1155,21 @@ async function runSchematicBuild(requester, name, coordInfo = { origin: null, ro
   }
 
   if (!blocks) {
-    safeChat(`Schematic "${name}" not found on server — upload it via dashboard or check name.`);
+    const files = listSchematicFiles();
+    const summary = files.map((f, i) => `${i + 1}: ${f.replace(/\.(litematic|nbt|schematic)$/i, '')}`).join(', ');
+    safeChat(`Schematic "${name}" not found. Available options: ${summary}. Use: !schematic <number|name>`);
     return;
   }
   if (blocks.length === 0) {
     safeChat(`Schematic "${name}" contains no non-air blocks.`);
     return;
+  }
+
+  if (builder.isBuilding()) {
+    safeChat(`[Builder] Cancelling current build ("${builder.currentJob?.name || 'task'}") to start "${name}"...`);
+    builder.cancel();
+    if (swarm) swarm.cancelAll();
+    await new Promise((r) => setTimeout(r, 400));
   }
 
   if (bot.game?.gameMode !== 'creative') {
