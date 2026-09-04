@@ -1,0 +1,45 @@
+{
+  "name": "Minecraft Builder Bot",
+  "bot": {
+    "username": "BuilderBot",
+    "password": "",
+    "type": "offline"
+  },
+  "server": {
+    "ip": "akshat908-qceo.aternos.me",
+    "port": 14539,
+    "version": "1.21.4",
+    "tryCreative": true,
+    "viaProxy": {
+      "enabled": false,
+      "host": "127.0.0.1",
+      "port": 25577,
+      "targetVersion": "26.2"
+    }
+  },
+  "swarm": {
+    "enabled": true,
+    "targetCount": 10,
+    "autoSpawnAll": true,
+    "staggerJoinDelay": 6000,
+    "autoAuthPassword": "chalol78",
+    "antiAfk": true,
+    "placeDelayMs": 80
+  },
+  "builder": {
+    "defaultBlock": "cobblestone"
+  },
+  "utils": {
+    "auto-auth": {
+      "enabled": true,
+      "password": "chalol78"
+    },
+    "auto-reconnect": true,
+    "auto-reconnect-delay": 3000,
+    "max-reconnect-delay": 30000,
+    "chat-log": true
+  },
+  "web": {
+    "port": 8080
+  }
+}
