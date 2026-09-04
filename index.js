@@ -1,5 +1,18 @@
 'use strict';
 
+// Self-healing check for broken dependencies on cloud hosts with stale build caches
+try {
+  require('smart-buffer');
+} catch (e) {
+  console.log('[System] smart-buffer missing or corrupt in build cache, self-healing now...');
+  try {
+    require('child_process').execSync('npm install smart-buffer@4.2.0 --force', { stdio: 'inherit' });
+    console.log('[System] smart-buffer successfully repaired.');
+  } catch (err) {
+    console.error('[System] Failed to auto-repair smart-buffer:', err.message);
+  }
+}
+
 const express = require('express');
 const multer = require('multer');
 const mineflayer = require('mineflayer');
