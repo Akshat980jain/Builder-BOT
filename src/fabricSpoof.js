@@ -1,9 +1,16 @@
 'use strict';
 
 /**
- * Minimal Fabric Protocol & Configuration State Handler.
- * Replies to select_known_packs exactly ONCE to avoid "Invalid custom payload" kick.
- * Does NOT intercept generic 'packet' events to avoid double-sends.
+ * Fabric Brand Registration for Minecraft 1.21.x servers.
+ *
+ * IMPORTANT: Do NOT intercept select_known_packs here.
+ * mineflayer@4.38.0 handles the entire configuration phase (select_known_packs,
+ * finish_configuration) automatically via minecraft-protocol internals.
+ * Adding a second reply here causes a double-send crash:
+ *   TypeError: SizeOf error for undefined (reading 'length')
+ *
+ * All this plugin needs to do is send the Fabric brand custom_payload
+ * so the server recognises the client as a Fabric mod client.
  */
 function installFabricSpoof(bot) {
   const client = bot._client;
@@ -16,51 +23,36 @@ function installFabricSpoof(bot) {
     'fabric:registry/sync/direct',
   ];
 
-  // Send the Fabric brand + channel registrations once when entering configuration state
-  function sendFabricRegistration() {
+  function sendFabricBrand() {
     try {
+      // Tell the server we are a Fabric client
       client.write('custom_payload', {
         channel: 'minecraft:brand',
         data: Buffer.from([6, ...Buffer.from('fabric', 'utf8')]),
       });
 
+      // Register mod channels so the server can send us mod packets
       const channelBuf = Buffer.from(MOD_CHANNELS.join('\0'), 'utf8');
       client.write('custom_payload', {
         channel: 'minecraft:register',
         data: channelBuf,
       });
+
       console.log('[Fabric Spoof] Sent Fabric brand and registered channels.');
-    } catch (e) {
-      // Silently ignore if channel is not open yet
+    } catch (_) {
+      // Silently ignore — channel may not be ready yet
     }
   }
 
-  // Fire registration once on entering configuration state
+  // Send fabric brand once when we enter the configuration state
   client.on('state', (newState) => {
     if (newState === 'configuration') {
-      sendFabricRegistration();
+      sendFabricBrand();
     }
   });
 
-  // Reply to select_known_packs EXACTLY once (only this handler, no duplicate in 'packet')
-  client.on('select_known_packs', (packet) => {
-    try {
-      console.log('[Fabric Spoof] Intercepted select_known_packs, replying...');
-
-      // Echo back whatever packs the server told us about (or vanilla core as fallback)
-      const knownPacks = Array.isArray(packet?.knownPacks) && packet.knownPacks.length > 0
-        ? packet.knownPacks.map((p) => ({
-            namespace: String(p.namespace || 'minecraft'),
-            id: String(p.id || 'core'),
-            version: String(p.version || '1.21.4'),
-          }))
-        : [{ namespace: 'minecraft', id: 'core', version: '1.21.4' }];
-
-      client.write('select_known_packs', { knownPacks });
-    } catch (e) {
-      console.log('[Fabric Spoof] select_known_packs reply error:', e.message);
-    }
-  });
+  // *** DO NOT add a select_known_packs handler here ***
+  // mineflayer handles it automatically — a second reply causes a crash.
 
   bot._fabricSpoofInstalled = true;
 }
