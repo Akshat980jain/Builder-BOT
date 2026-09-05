@@ -357,7 +357,7 @@ app.get('/', (req, res) => {
               <option value="">Loading schematics...</option>
             </select>
           </div>
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px;">
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px;">
             <div>
               <label style="display:block; font-size: 12px; color: var(--text-muted); margin-bottom: 4px;">Rotation:</label>
               <select id="schematicRot" style="width: 100%; background: rgba(0,0,0,0.5); border: 1px solid var(--border); color: #fff; padding: 8px; border-radius: 8px;">
@@ -370,6 +370,20 @@ app.get('/', (req, res) => {
             <div>
               <label style="display:block; font-size: 12px; color: var(--text-muted); margin-bottom: 4px;">Workers (1..10):</label>
               <input id="schematicWorkers" type="number" min="1" max="10" value="3" style="width: 100%; background: rgba(0,0,0,0.5); border: 1px solid var(--border); color: #fff; padding: 8px; border-radius: 8px;">
+            </div>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-bottom: 14px;">
+            <div>
+              <label style="display:block; font-size: 12px; color: var(--text-muted); margin-bottom: 4px;">Origin X:</label>
+              <input id="schematicX" type="number" placeholder="Auto (Bot X)" style="width: 100%; background: rgba(0,0,0,0.5); border: 1px solid var(--border); color: #fff; padding: 8px; border-radius: 8px;">
+            </div>
+            <div>
+              <label style="display:block; font-size: 12px; color: var(--text-muted); margin-bottom: 4px;">Origin Y:</label>
+              <input id="schematicY" type="number" placeholder="Auto (Bot Y)" style="width: 100%; background: rgba(0,0,0,0.5); border: 1px solid var(--border); color: #fff; padding: 8px; border-radius: 8px;">
+            </div>
+            <div>
+              <label style="display:block; font-size: 12px; color: var(--text-muted); margin-bottom: 4px;">Origin Z:</label>
+              <input id="schematicZ" type="number" placeholder="Auto (Bot Z)" style="width: 100%; background: rgba(0,0,0,0.5); border: 1px solid var(--border); color: #fff; padding: 8px; border-radius: 8px;">
             </div>
           </div>
           <button class="cmd-btn" style="width: 100%; background: var(--accent); color: #000; font-weight: 800;" onclick="buildSelectedSchematic()">🏗️ Build Selected Schematic</button>
@@ -522,11 +536,18 @@ app.get('/', (req, res) => {
       }
       const rot = parseInt(document.getElementById('schematicRot')?.value || '0', 10);
       const workers = parseInt(document.getElementById('schematicWorkers')?.value || '3', 10);
+      const xs = document.getElementById('schematicX')?.value.trim();
+      const ys = document.getElementById('schematicY')?.value.trim();
+      const zs = document.getElementById('schematicZ')?.value.trim();
+      let origin = null;
+      if (xs && ys && zs && !isNaN(Number(xs)) && !isNaN(Number(ys)) && !isNaN(Number(zs))) {
+        origin = { x: Number(xs), y: Number(ys), z: Number(zs) };
+      }
 
       const res = await fetch('/api/build/schematic', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: filename, rotation: rot, swarmCount: workers })
+        body: JSON.stringify({ name: filename, rotation: rot, swarmCount: workers, origin })
       });
       const data = await res.json();
       alert(data.message || 'Build started!');
@@ -928,7 +949,7 @@ function resolveOrigin(requester, explicitOrigin) {
 function parseSchematicCommand(args) {
   let rotation = 0;
   let origin = null;
-  const nameTokens = [...args];
+  let nameTokens = [...args];
 
   let swarmCount = null;
   // Check if 'swarm <count>' is at the start
@@ -942,28 +963,51 @@ function parseSchematicCommand(args) {
     nameTokens.pop();
   }
 
+  // Strip commas and extra quotes from tokens
+  nameTokens = nameTokens.map((t) => t.replace(/[,"]+/g, '').trim()).filter(Boolean);
+
+  const parseNum = (val) => {
+    if (typeof val !== 'string') return null;
+    if (val.startsWith('~')) {
+      const offset = val.length > 1 ? parseFloat(val.slice(1)) : 0;
+      const ref = bot?.entity ? bot.entity.position : new Vec3(0, 64, 0);
+      return Math.floor(ref.x + (isNaN(offset) ? 0 : offset));
+    }
+    const num = parseFloat(val);
+    return isNaN(num) ? null : Math.floor(num);
+  };
+
+  const isNumeric = (val) => typeof val === 'string' && (val.startsWith('~') || /^-?\d+(?:\.\d+)?$/.test(val));
+
+  // Pattern A: <name...> <x> <y> <z> <rotation>
   if (
     nameTokens.length >= 4 &&
-    /^-?\d+$/.test(nameTokens[nameTokens.length - 4]) &&
-    /^-?\d+$/.test(nameTokens[nameTokens.length - 3]) &&
-    /^-?\d+$/.test(nameTokens[nameTokens.length - 2]) &&
+    isNumeric(nameTokens[nameTokens.length - 4]) &&
+    isNumeric(nameTokens[nameTokens.length - 3]) &&
+    isNumeric(nameTokens[nameTokens.length - 2]) &&
     VALID_ROTATIONS.has(nameTokens[nameTokens.length - 1])
   ) {
     rotation = parseInt(nameTokens.pop(), 10);
-    const z = parseInt(nameTokens.pop(), 10);
-    const y = parseInt(nameTokens.pop(), 10);
-    const x = parseInt(nameTokens.pop(), 10);
-    origin = new Vec3(x, y, z);
+    const z = parseNum(nameTokens.pop());
+    const y = parseNum(nameTokens.pop());
+    const x = parseNum(nameTokens.pop());
+    if (x !== null && y !== null && z !== null) {
+      origin = new Vec3(x, y, z);
+    }
+  // Pattern B: <name...> <x> <y> <z>
   } else if (
     nameTokens.length >= 3 &&
-    /^-?\d+$/.test(nameTokens[nameTokens.length - 3]) &&
-    /^-?\d+$/.test(nameTokens[nameTokens.length - 2]) &&
-    /^-?\d+$/.test(nameTokens[nameTokens.length - 1])
+    isNumeric(nameTokens[nameTokens.length - 3]) &&
+    isNumeric(nameTokens[nameTokens.length - 2]) &&
+    isNumeric(nameTokens[nameTokens.length - 1])
   ) {
-    const z = parseInt(nameTokens.pop(), 10);
-    const y = parseInt(nameTokens.pop(), 10);
-    const x = parseInt(nameTokens.pop(), 10);
-    origin = new Vec3(x, y, z);
+    const z = parseNum(nameTokens.pop());
+    const y = parseNum(nameTokens.pop());
+    const x = parseNum(nameTokens.pop());
+    if (x !== null && y !== null && z !== null) {
+      origin = new Vec3(x, y, z);
+    }
+  // Pattern C: <name...> <rotation>
   } else if (nameTokens.length >= 2 && VALID_ROTATIONS.has(nameTokens[nameTokens.length - 1])) {
     rotation = parseInt(nameTokens.pop(), 10);
   }
@@ -1092,7 +1136,13 @@ async function runSchematicBuild(requester, name, coordInfo = { origin: null, ro
   const origin = resolveOrigin(requester, coordInfo.origin);
   if (bot.entity && bot.entity.position.distanceTo(origin) > 8) {
     safeChat(`/tp ${BOT_USERNAME} ${origin.x} ${origin.y + 1} ${origin.z}`);
-    safeChat(`/tp @e[type=player,name=BuilderBot*] ${origin.x} ${origin.y + 1} ${origin.z}`);
+    if (swarm) {
+      for (const w of swarm.workers.values()) {
+        if (w.connected && w.bot) {
+          safeChat(`/tp ${w.username} ${origin.x} ${origin.y + 1} ${origin.z}`);
+        }
+      }
+    }
     await new Promise((r) => setTimeout(r, 1200));
   }
   const workforce = swarm.getWorkerCount();

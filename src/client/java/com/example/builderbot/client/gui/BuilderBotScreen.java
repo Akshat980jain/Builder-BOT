@@ -70,23 +70,19 @@ public class BuilderBotScreen extends Screen {
         // Auto-switch all bots to creative mode
         ensureBotsInCreative();
 
-        // Auto-detect the bot's position so the preview and build land exactly where the bot is standing!
-        BlockPos botPos = null;
-        if (bot != null) {
-            botPos = bot.blockPosition();
-        } else {
-            botPos = findBotPosition();
-        }
-
-        if (botPos != null) {
-            savedCoordX = String.valueOf(botPos.getX());
-            savedCoordY = String.valueOf(botPos.getY());
-            savedCoordZ = String.valueOf(botPos.getZ());
-        } else if (savedCoordX.isEmpty() && Minecraft.getInstance().player != null) {
-            BlockPos pPos = Minecraft.getInstance().player.blockPosition();
-            savedCoordX = String.valueOf(pPos.getX());
-            savedCoordY = String.valueOf(pPos.getY());
-            savedCoordZ = String.valueOf(pPos.getZ());
+        // Only initialize coordinates if not already explicitly assigned by the user
+        if (savedCoordX.isEmpty() && savedCoordY.isEmpty() && savedCoordZ.isEmpty()) {
+            BlockPos botPos = (bot != null) ? bot.blockPosition() : findBotPosition();
+            if (botPos != null) {
+                savedCoordX = String.valueOf(botPos.getX());
+                savedCoordY = String.valueOf(botPos.getY());
+                savedCoordZ = String.valueOf(botPos.getZ());
+            } else if (Minecraft.getInstance().player != null) {
+                BlockPos pPos = Minecraft.getInstance().player.blockPosition();
+                savedCoordX = String.valueOf(pPos.getX());
+                savedCoordY = String.valueOf(pPos.getY());
+                savedCoordZ = String.valueOf(pPos.getZ());
+            }
         }
     }
 
@@ -341,9 +337,9 @@ public class BuilderBotScreen extends Screen {
         String zs = coordZBox != null ? coordZBox.getValue().trim() : savedCoordZ.trim();
         if (!xs.isEmpty() && !ys.isEmpty() && !zs.isEmpty()) {
             try {
-                int x = Integer.parseInt(xs);
-                int y = Integer.parseInt(ys);
-                int z = Integer.parseInt(zs);
+                int x = (int) Math.floor(Double.parseDouble(xs.replace(",", "")));
+                int y = (int) Math.floor(Double.parseDouble(ys.replace(",", "")));
+                int z = (int) Math.floor(Double.parseDouble(zs.replace(",", "")));
                 return new BlockPos(x, y, z);
             } catch (NumberFormatException ignored) {}
         }
@@ -358,13 +354,11 @@ public class BuilderBotScreen extends Screen {
     }
 
     private String buildCoordArgsString() {
-        String x = coordXBox != null ? coordXBox.getValue().trim() : savedCoordX.trim();
-        String y = coordYBox != null ? coordYBox.getValue().trim() : savedCoordY.trim();
-        String z = coordZBox != null ? coordZBox.getValue().trim() : savedCoordZ.trim();
-        if (x.isEmpty() || y.isEmpty() || z.isEmpty()) {
-            return selectedRotation > 0 ? " " + selectedRotation : "";
+        BlockPos origin = getTargetOrigin();
+        if (origin != null) {
+            return " " + origin.getX() + " " + origin.getY() + " " + origin.getZ() + " " + selectedRotation;
         }
-        return " " + x + " " + y + " " + z + " " + selectedRotation;
+        return selectedRotation > 0 ? " " + selectedRotation : "";
     }
 
     // ── TAB 1: SWARM CONTROLS, FLEET & UNDO ─────────────────────────────
@@ -629,36 +623,35 @@ public class BuilderBotScreen extends Screen {
     private void runCommand(String command) {
         if (Minecraft.getInstance().player != null && Minecraft.getInstance().player.connection != null) {
             var conn = Minecraft.getInstance().player.connection;
-            boolean isIntegratedServer = Minecraft.getInstance().hasSingleplayerServer();
 
-            if (isIntegratedServer) {
-                // In singleplayer, the mod is installed on the internal server
-                conn.sendCommand(command);
-            } else {
-                // On a multiplayer server (Aternos/Vanilla), translate directly into in-game bot chat commands
-                if (command.equals("builderbot undo") || command.contains("undo")) {
-                    conn.sendChat("!undo");
-                } else if (command.equals("builderbot stop") || command.equals("builderbot stopall")) {
-                    conn.sendChat("!stop");
-                } else if (command.equals("builderbot tp")) {
-                    conn.sendChat("!come");
-                } else if (command.contains("schematic ")) {
-                    String name = command.substring(command.indexOf("schematic ") + "schematic ".length()).trim();
-                    if (command.contains("swarm ") && selectedBotCount > 1) {
-                        conn.sendChat("!schematic swarm " + selectedBotCount + " " + name);
-                    } else {
-                        conn.sendChat("!schematic " + name);
-                    }
-                } else if (command.contains(" build ")) {
-                    String name = command.substring(command.indexOf(" build ") + " build ".length()).trim();
-                    if (command.contains("swarm ") && selectedBotCount > 1) {
-                        conn.sendChat("!schematic swarm " + selectedBotCount + " " + name);
-                    } else {
-                        conn.sendChat("!schematic " + name);
-                    }
-                } else if (command.equals("builderbot fly")) {
-                    conn.sendChat("!status");
+            // Translate directly into in-game bot chat commands for the Mineflayer swarm bots
+            if (command.equals("builderbot undo") || command.contains("undo")) {
+                conn.sendChat("!undo");
+            } else if (command.equals("builderbot stop") || command.equals("builderbot stopall")) {
+                conn.sendChat("!stop");
+            } else if (command.equals("builderbot tp")) {
+                conn.sendChat("!come");
+            } else if (command.contains("schematic ")) {
+                String name = command.substring(command.indexOf("schematic ") + "schematic ".length()).trim();
+                if (command.contains("swarm ") && selectedBotCount > 1) {
+                    conn.sendChat("!schematic swarm " + selectedBotCount + " " + name);
+                } else {
+                    conn.sendChat("!schematic " + name);
                 }
+            } else if (command.contains(" build ")) {
+                String name = command.substring(command.indexOf(" build ") + " build ".length()).trim();
+                if (command.contains("swarm ") && selectedBotCount > 1) {
+                    conn.sendChat("!schematic swarm " + selectedBotCount + " " + name);
+                } else {
+                    conn.sendChat("!schematic " + name);
+                }
+            } else if (command.equals("builderbot fly")) {
+                conn.sendChat("!status");
+            }
+
+            // Also invoke internal command if running in singleplayer server
+            if (Minecraft.getInstance().hasSingleplayerServer()) {
+                conn.sendCommand(command);
             }
         }
     }
