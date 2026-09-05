@@ -128,10 +128,23 @@ function finalizeBlocks(rawBlocks, rotation = 0) {
     });
   }
 
-  // 3. CRITICAL: Sort strictly bottom-to-top (ascending Y)
-  // This ensures layer 0 is placed first, so higher blocks have ground/support underneath!
+const DEPENDENT_BLOCK_NAMES = new Set([
+  'torch', 'wall_torch', 'soul_torch', 'soul_wall_torch', 'redstone_torch', 'redstone_wall_torch',
+  'lantern', 'soul_lantern', 'lever', 'stone_button', 'oak_button', 'spruce_button', 'button',
+  'redstone_wire', 'repeater', 'comparator', 'ladder', 'vine', 'glow_lichen',
+  'spruce_trapdoor', 'oak_trapdoor', 'iron_trapdoor', 'dark_oak_trapdoor', 'birch_trapdoor',
+  'jungle_trapdoor', 'acacia_trapdoor', 'mangrove_trapdoor', 'cherry_trapdoor', 'bamboo_trapdoor',
+  'crimson_trapdoor', 'warped_trapdoor', 'carpet', 'gray_carpet', 'black_carpet', 'white_carpet'
+]);
+
+  // 3. CRITICAL: Sort strictly bottom-to-top (ascending Y), solid blocks before attachables
   finalBlocks.sort((a, b) => {
     if (a.pos.y !== b.pos.y) return a.pos.y - b.pos.y;
+    const aClean = a.name.replace('minecraft:', '');
+    const bClean = b.name.replace('minecraft:', '');
+    const aDep = DEPENDENT_BLOCK_NAMES.has(aClean) ? 1 : 0;
+    const bDep = DEPENDENT_BLOCK_NAMES.has(bClean) ? 1 : 0;
+    if (aDep !== bDep) return aDep - bDep;
     if (a.pos.z !== b.pos.z) return a.pos.z - b.pos.z;
     return a.pos.x - b.pos.x;
   });

@@ -45,6 +45,15 @@ const REPLACEABLE_BLOCKS = new Set([
   'snow', 'vine', 'glow_lichen', 'seagrass', 'tall_seagrass'
 ]);
 
+const DEPENDENT_BLOCK_NAMES = new Set([
+  'torch', 'wall_torch', 'soul_torch', 'soul_wall_torch', 'redstone_torch', 'redstone_wall_torch',
+  'lantern', 'soul_lantern', 'lever', 'stone_button', 'oak_button', 'spruce_button', 'button',
+  'redstone_wire', 'repeater', 'comparator', 'ladder', 'vine', 'glow_lichen',
+  'spruce_trapdoor', 'oak_trapdoor', 'iron_trapdoor', 'dark_oak_trapdoor', 'birch_trapdoor',
+  'jungle_trapdoor', 'acacia_trapdoor', 'mangrove_trapdoor', 'cherry_trapdoor', 'bamboo_trapdoor',
+  'crimson_trapdoor', 'warped_trapdoor', 'carpet', 'gray_carpet', 'black_carpet', 'white_carpet'
+]);
+
 function formatBlockState(name, properties) {
   if (!properties || Object.keys(properties).length === 0) return name;
   const props = Object.entries(properties)
@@ -113,8 +122,16 @@ class Builder {
         });
       }
     }
-    // Sort bottom-to-top so foundation layers build first
-    list.sort((a, b) => (a.pos.y - b.pos.y) || (a.pos.x - b.pos.x) || (a.pos.z - b.pos.z));
+    // Sort bottom-to-top so foundation layers build first, and solid blocks before attachables
+    list.sort((a, b) => {
+      if (a.pos.y !== b.pos.y) return a.pos.y - b.pos.y;
+      const aClean = (a.name || '').replace('minecraft:', '');
+      const bClean = (b.name || '').replace('minecraft:', '');
+      const aDep = DEPENDENT_BLOCK_NAMES.has(aClean) ? 1 : 0;
+      const bDep = DEPENDENT_BLOCK_NAMES.has(bClean) ? 1 : 0;
+      if (aDep !== bDep) return aDep - bDep;
+      return (a.pos.x - b.pos.x) || (a.pos.z - b.pos.z);
+    });
     for (const item of list) {
       this.queue.push(item);
     }
@@ -182,6 +199,9 @@ class Builder {
           console.log(`[Builder] Skipping block at ${target.pos} after 3 attempts (${err.message})`);
         }
         consecutiveFails++;
+        if (consecutiveFails === 3 && this.bot && typeof this.bot.chat === 'function') {
+          this.bot.chat(`[Builder] ⚠ Cannot place blocks! Please run: /gamemode creative ${this.bot.username}`);
+        }
       }
       await sleep(this.placeDelayMs);
     }
@@ -211,7 +231,11 @@ class Builder {
     }
 
     await sleep(this.placeDelayMs || 100);
-    return true;
+    const check = bot.blockAt(pos);
+    if (check && check.name && !check.name.includes('air')) {
+      return true;
+    }
+    return false;
   }
 
   async _placeOne(target) {
@@ -247,7 +271,9 @@ class Builder {
       try {
         await this._moveToPosition(target.pos, target.pos);
       } catch (_) {}
-      return await this._placeViaSetblock(target.pos, stateStr);
+      const ok = await this._placeViaSetblock(target.pos, stateStr);
+      if (ok) return true;
+      throw new Error(`Modded block ${stateStr} at ${target.pos} failed to place via /setblock (needs OP)`);
     }
 
     // 4. Vanilla blocks: Exact match only, NO fuzzy matching!
@@ -264,23 +290,39 @@ class Builder {
         if (itemEntry) {
           const Item = require('prismarine-item')(bot.version || '1.21.4');
           await bot.creative.setInventorySlot(36, new Item(itemEntry.id, 64));
-          item = bot.inventory.slots[36];
+          item = bot.inventory.slots[36] || bot.inventory.items().find((i) => i.name === itemName || i.name === cleanName);
         }
       } catch (e) {}
     }
 
-    // If still no item, fall back directly to /setblock instead of skipping or substituting random blocks!
+    if (bot.game?.gameMode !== 'creative' && !this._warnedGamemode) {
+      this._warnedGamemode = true;
+      if (typeof bot.chat === 'function') {
+        bot.chat(`[Builder] ⚠ I am in Survival mode! Please run: /gamemode creative ${bot.username} so I can place blocks!`);
+      }
+    }
+
+    // If still no item, try /setblock
     if (!item) {
-      return await this._placeViaSetblock(target.pos, stateStr);
+      const ok = await this._placeViaSetblock(target.pos, stateStr);
+      if (ok) return true;
+      throw new Error(`Missing item "${cleanName}" in inventory and /setblock failed. Run /gamemode creative ${bot.username}`);
     }
 
     // 5. Find solid reference block to place against
     let referenceInfo = this._findReferenceBlock(target.pos);
     if (!referenceInfo) {
+      if (DEPENDENT_BLOCK_NAMES.has(cleanName) && (target.retries || 0) < 5) {
+        target.retries = (target.retries || 0) + 1;
+        this.queue.push(target);
+        return false;
+      }
       referenceInfo = await this._createGroundAnchor(target.pos);
     }
     if (!referenceInfo) {
-      return await this._placeViaSetblock(target.pos, stateStr);
+      const ok = await this._placeViaSetblock(target.pos, stateStr);
+      if (ok) return true;
+      throw new Error(`No solid block adjacent to place "${cleanName}" against at ${target.pos}`);
     }
     const { refPos, faceVector } = referenceInfo;
 
@@ -298,7 +340,9 @@ class Builder {
 
     const refBlock = bot.blockAt(refPos);
     if (!refBlock) {
-      return await this._placeViaSetblock(target.pos, stateStr);
+      const ok = await this._placeViaSetblock(target.pos, stateStr);
+      if (ok) return true;
+      throw new Error(`Reference block at ${refPos} missing`);
     }
 
     // 8. Look at target face and place block
@@ -315,16 +359,21 @@ class Builder {
     // Place block: give realistic timeout (3500ms)
     try {
       await withTimeout(bot.placeBlock(refBlock, faceVector), 3500);
-      return true;
-    } catch (err) {
-      // Check if the block actually got placed despite timeout or error
       const verify = bot.blockAt(target.pos);
       if (verify && verify.name && !verify.name.includes('air')) {
         return true;
       }
-      // If vanilla placement failed, fall back to /setblock to guarantee completion!
-      return await this._placeViaSetblock(target.pos, stateStr);
+    } catch (err) {
+      const verify = bot.blockAt(target.pos);
+      if (verify && verify.name && !verify.name.includes('air')) {
+        return true;
+      }
     }
+
+    // Fall back to /setblock
+    const ok = await this._placeViaSetblock(target.pos, stateStr);
+    if (ok) return true;
+    throw new Error(`Failed to place "${cleanName}" at ${target.pos}`);
   }
 
   async _moveToPosition(targetPos, refPos) {
