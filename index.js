@@ -637,11 +637,14 @@ async function loadSchematicBlocks(name, rotation = 0) {
 
   // 4. Fuzzy match: spaces, dashes, underscores stripped
   if (!match) {
+    if (trimmed.length > 50 || trimmed.includes('\n') || trimmed.includes('!')) {
+      return null;
+    }
     const cleanQuery = trimmed.replace(/[\s._-]+/g, '').toLowerCase();
     match = files.find((f) => {
       const cleanF = f.replace(/[\s._-]+/g, '').toLowerCase();
       const cleanBase = f.replace(/\.(litematic|nbt|schematic)$/i, '').replace(/[\s._-]+/g, '').toLowerCase();
-      return cleanF.includes(cleanQuery) || cleanQuery.includes(cleanBase) || cleanBase.includes(cleanQuery);
+      return cleanF.includes(cleanQuery) || cleanBase.includes(cleanQuery);
     });
   }
 
@@ -672,11 +675,34 @@ let reconnectTimer = null;
 let afkInterval = null;
 let kickedDelay = null; // set by 'kicked' handler, consumed by 'end' handler
 
-function safeChat(msg) {
-  if (bot && bot.entity && typeof bot.chat === 'function') {
-    const clean = String(msg || '').replace(/[^\x20-\x7E]/g, '');
-    bot.chat(clean);
+const chatQueue = [];
+let isProcessingChatQueue = false;
+
+async function processChatQueue() {
+  if (isProcessingChatQueue) return;
+  isProcessingChatQueue = true;
+  while (chatQueue.length > 0) {
+    const msg = chatQueue.shift();
+    if (bot && bot.entity && typeof bot.chat === 'function') {
+      try {
+        bot.chat(msg);
+      } catch (err) {
+        logSystem(`[Chat Error] ${err.message}`);
+      }
+    }
+    await new Promise((r) => setTimeout(r, 600)); // Minimum 600ms gap between any chat packets to eliminate server spam kicks
   }
+  isProcessingChatQueue = false;
+}
+
+function safeChat(msg) {
+  if (!msg) return;
+  const clean = String(msg).replace(/[^\x20-\x7E]/g, '').trim();
+  if (!clean) return;
+  // Discard duplicate messages if already in queue
+  if (chatQueue.length > 0 && chatQueue[chatQueue.length - 1] === clean) return;
+  chatQueue.push(clean);
+  processChatQueue();
 }
 
 function createBot() {
@@ -820,13 +846,26 @@ function createBot() {
     if (!message) return;
     const clean = message.trim();
     // Strictly ignore any messages from BuilderBot, swarm bots, or announcements
-    if (clean.includes('BuilderBot') || clean.includes(BOT_USERNAME) || clean.includes('[Builder]') || clean.includes('[Swarm]')) return;
+    if (
+      clean.includes('BuilderBot') ||
+      clean.includes(BOT_USERNAME) ||
+      clean.includes('[Builder') ||
+      clean.includes('[Swarm') ||
+      clean.includes('[Schematic') ||
+      clean.includes('[Progress') ||
+      clean.includes('[Status') ||
+      clean.includes('[Movement') ||
+      clean.includes('[Commands') ||
+      clean.includes('[Undo') ||
+      clean.includes('not found') ||
+      clean.startsWith('[')
+    ) return;
 
     // Only match messages where a real player is speaking: <PlayerName> !command or PlayerName: !command
     const cmdMatch = clean.match(/^(?:<([A-Za-z0-9_]{3,16})>|([A-Za-z0-9_]{3,16})\s*[:»>])\s*(![a-zA-Z0-9_-]+.*)$/);
     if (cmdMatch) {
       const sender = cmdMatch[1] || cmdMatch[2];
-      if (!sender || sender.toLowerCase().startsWith('builderbot')) return;
+      if (!sender || sender.toLowerCase().startsWith('builderbot') || sender === BOT_USERNAME) return;
       const cmdText = cmdMatch[3].trim();
       const now = Date.now();
       if (cmdText === lastCmdText && now - lastCmdTime < 1000) return;
@@ -1117,11 +1156,11 @@ async function runSchematicBuild(requester, name, coordInfo = { origin: null, ro
   if (!blocks) {
     const files = listSchematicFiles();
     const summary = files.map((f, i) => `${i + 1}: ${f.replace(/\.(litematic|nbt|schematic)$/i, '')}`).join(', ');
-    safeChat(`Schematic "${name}" not found. Available options: ${summary}. Use: !schematic <number|name>`);
+    safeChat(`[Builder] Schematic "${name}" not found. Available options: ${summary}.`);
     return;
   }
   if (blocks.length === 0) {
-    safeChat(`Schematic "${name}" contains no non-air blocks.`);
+    safeChat(`[Builder] Schematic "${name}" contains no non-air blocks.`);
     return;
   }
 
@@ -1132,22 +1171,12 @@ async function runSchematicBuild(requester, name, coordInfo = { origin: null, ro
     await new Promise((r) => setTimeout(r, 400));
   }
 
-  if (bot.game?.gameMode !== 'creative') {
-    safeChat(`/gamemode creative ${BOT_USERNAME}`);
-    safeChat(`[Builder] ⚠ Notice: If I am in Survival mode, please run: /gamemode creative ${BOT_USERNAME} so I can synthesize deepslate & farm blocks!`);
-  }
   builder.setJob(name);
   const origin = resolveOrigin(requester, coordInfo.origin);
   if (bot.entity && bot.entity.position.distanceTo(origin) > 8) {
-    safeChat(`/tp ${BOT_USERNAME} ${origin.x} ${origin.y + 1} ${origin.z}`);
-    if (swarm) {
-      for (const w of swarm.workers.values()) {
-        if (w.connected && w.bot) {
-          safeChat(`/tp ${w.username} ${origin.x} ${origin.y + 1} ${origin.z}`);
-        }
-      }
+    if (bot.game?.gameMode === 'creative' && bot.creative && typeof bot.creative.flyTo === 'function') {
+      try { await bot.creative.flyTo(new Vec3(origin.x, origin.y + 1, origin.z)); } catch (_) {}
     }
-    await new Promise((r) => setTimeout(r, 1200));
   }
   const workforce = swarm.getWorkerCount();
   safeChat(

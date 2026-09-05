@@ -204,12 +204,9 @@ class Builder {
           console.log(`[Builder] Skipping block at ${target.pos} after 3 attempts (${err.message})`);
         }
         consecutiveFails++;
-        if (consecutiveFails === 3 && this.bot && typeof this.bot.chat === 'function') {
-          this.bot.chat(`/gamemode creative ${this.bot.username}`);
-          if (!this._warnedGamemode) {
-            this._warnedGamemode = true;
-            this.bot.chat(`[Builder] ⚠ Cannot place blocks! Requesting: /gamemode creative ${this.bot.username}`);
-          }
+        if (consecutiveFails === 10 && !this._warnedGamemode) {
+          this._warnedGamemode = true;
+          console.log(`[Builder] ⚠ Having difficulty placing blocks at current position for ${this.bot.username}`);
         }
       }
       await sleep(this.placeDelayMs);
@@ -222,29 +219,24 @@ class Builder {
     return { placed, total, left, percent, cancelled: this.cancelled };
   }
 
-  async _placeViaSetblock(pos, stateStr) {
+  async _placeViaCreative(target, cleanName, rawName, stateStr) {
     const bot = this.bot;
-    const x = Math.floor(pos.x);
-    const y = Math.floor(pos.y);
-    const z = Math.floor(pos.z);
-    const cmd = `/setblock ${x} ${y} ${z} ${stateStr} replace`;
+    const mcData = require('minecraft-data')(bot.version || '1.21.4');
+    const itemName = blockToItemName(cleanName);
 
-    try {
-      if (typeof bot.swingArm === 'function') {
-        bot.swingArm('right');
-      }
-    } catch (_) {}
-
-    if (typeof bot.chat === 'function') {
-      bot.chat(cmd);
+    // Try to ensure item in inventory
+    let item = bot.inventory.items().find((i) => i.name === itemName || i.name === cleanName);
+    if (!item && bot.creative && typeof bot.creative.setInventorySlot === 'function') {
+      try {
+        const itemEntry = mcData?.itemsByName[itemName] || mcData?.blocksByName[cleanName];
+        if (itemEntry) {
+          const Item = require('prismarine-item')(bot.version || '1.21.4');
+          await withTimeout(bot.creative.setInventorySlot(36, new Item(itemEntry.id, 64)), 1000);
+          item = bot.inventory.slots[36] || bot.inventory.items().find((i) => i.name === itemName || i.name === cleanName);
+        }
+      } catch (e) {}
     }
-
-    await sleep(this.placeDelayMs || 100);
-    const check = bot.blockAt(pos);
-    if (check && check.name && !check.name.includes('air')) {
-      return true;
-    }
-    return false;
+    return item;
   }
 
   async _placeOne(target) {
@@ -275,17 +267,7 @@ class Builder {
       }
     }
 
-    // 3. Modded blocks (Create Mod, etc.): Place directly via /setblock with full blockstate
-    if (isModded) {
-      try {
-        await this._moveToPosition(target.pos, target.pos);
-      } catch (_) {}
-      const ok = await this._placeViaSetblock(target.pos, stateStr);
-      if (ok) return true;
-      throw new Error(`Modded block ${stateStr} at ${target.pos} failed to place via /setblock (needs OP)`);
-    }
-
-    // 4. Vanilla blocks: Exact match only, NO fuzzy matching!
+    // 3. Modded blocks or standard blocks: Ensure item in inventory or provision from creative
     const itemName = blockToItemName(cleanName);
     const mcData = require('minecraft-data')(bot.version || '1.21.4');
 
@@ -304,30 +286,11 @@ class Builder {
       } catch (e) {}
     }
 
-    // If still missing, request creative mode and retry provisioning once
-    if (!item && bot.creative && typeof bot.creative.setInventorySlot === 'function') {
-      try {
-        if (typeof bot.chat === 'function') {
-          bot.chat(`/gamemode creative ${bot.username}`);
-        }
-        await sleep(250);
-        const itemEntry = mcData?.itemsByName[itemName] || mcData?.blocksByName[cleanName];
-        if (itemEntry) {
-          const Item = require('prismarine-item')(bot.version || '1.21.4');
-          await withTimeout(bot.creative.setInventorySlot(36, new Item(itemEntry.id, 64)), 1000);
-          item = bot.inventory.slots[36] || bot.inventory.items().find((i) => i.name === itemName || i.name === cleanName);
-        }
-      } catch (e) {}
-    }
-
-    // If still no item, try /setblock
     if (!item) {
-      const ok = await this._placeViaSetblock(target.pos, stateStr);
-      if (ok) return true;
-      throw new Error(`Missing item "${cleanName}" in inventory and /setblock failed. Ensure bot is in Creative mode: /gamemode creative ${bot.username}`);
+      throw new Error(`Missing item "${cleanName}" in inventory. Ensure bot is in Creative mode.`);
     }
 
-    // 5. Find solid reference block to place against
+    // 4. Find solid reference block to place against
     let referenceInfo = this._findReferenceBlock(target.pos);
     if (!referenceInfo) {
       if (DEPENDENT_BLOCK_NAMES.has(cleanName) && (target.retries || 0) < 5) {
@@ -338,18 +301,16 @@ class Builder {
       referenceInfo = await this._createGroundAnchor(target.pos);
     }
     if (!referenceInfo) {
-      const ok = await this._placeViaSetblock(target.pos, stateStr);
-      if (ok) return true;
       throw new Error(`No solid block adjacent to place "${cleanName}" against at ${target.pos}`);
     }
     const { refPos, faceVector } = referenceInfo;
 
-    // 6. Move to safe placing position
+    // 5. Move to safe placing position
     try {
       await this._moveToPosition(target.pos, refPos);
     } catch (_) {}
 
-    // 7. Equip exact item to main hand
+    // 6. Equip exact item to main hand
     if (!bot.heldItem || (bot.heldItem.name !== item.name && bot.heldItem.name !== itemName)) {
       try {
         await bot.equip(item, 'hand');
@@ -358,12 +319,10 @@ class Builder {
 
     const refBlock = bot.blockAt(refPos);
     if (!refBlock) {
-      const ok = await this._placeViaSetblock(target.pos, stateStr);
-      if (ok) return true;
       throw new Error(`Reference block at ${refPos} missing`);
     }
 
-    // 8. Look at target face and place block
+    // 7. Look at target face and place block
     const faceOffset = new Vec3(
       0.5 + faceVector.x * 0.5,
       0.5 + faceVector.y * 0.5,
@@ -386,12 +345,10 @@ class Builder {
       if (verify && verify.name && !verify.name.includes('air')) {
         return true;
       }
+      throw new Error(`Failed to place "${cleanName}" at ${target.pos}: ${err.message}`);
     }
 
-    // Fall back to /setblock
-    const ok = await this._placeViaSetblock(target.pos, stateStr);
-    if (ok) return true;
-    throw new Error(`Failed to place "${cleanName}" at ${target.pos}`);
+    return false;
   }
 
   async _moveToPosition(targetPos, refPos) {
@@ -424,11 +381,17 @@ class Builder {
 
     // 2. Reach check: Must be within reach distance of refPos (MC reach is ~4.5 blocks, stand at 2.0-3.2)
     const currentDistToRef = bot.entity ? bot.entity.position.distanceTo(refPos) : distToRef;
-    if (currentDistToRef > 6.0 && typeof bot.chat === 'function') {
+    if (currentDistToRef > 5.0) {
       const standX = refPos.x + (refPos.x > (bot.entity?.position.x || 0) ? -1.8 : 1.8);
       const standZ = refPos.z + (refPos.z > (bot.entity?.position.z || 0) ? -1.8 : 1.8);
-      bot.chat(`/tp ${bot.username} ${standX.toFixed(1)} ${refPos.y + 1} ${standZ.toFixed(1)}`);
-      await new Promise((r) => setTimeout(r, 400));
+      if (bot.game?.gameMode === 'creative' && bot.creative && typeof bot.creative.flyTo === 'function') {
+        try { await withTimeout(bot.creative.flyTo(new Vec3(standX, refPos.y + 1.0, standZ)), 1200); } catch (e) {}
+      } else if (bot.pathfinder) {
+        try {
+          const { goals } = require('mineflayer-pathfinder');
+          await withTimeout(bot.pathfinder.goto(new goals.GoalNear(refPos.x, refPos.y, refPos.z, 2.5)), 2500);
+        } catch (e) {}
+      }
     }
 
     const distAfterTp = bot.entity ? bot.entity.position.distanceTo(refPos) : distToRef;

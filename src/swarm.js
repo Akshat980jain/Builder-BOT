@@ -442,38 +442,31 @@ class SwarmManager {
   }
 
   async buildParallel(mainBuilder, blocks, origin, onProgress) {
-    // Ensure all connected workers & main bot are in creative mode
-    if (this.mainBot && typeof this.mainBot.chat === 'function') {
-      this.mainBot.chat(`/gamemode creative ${this.mainBot.username}`);
-    }
-    for (const w of this.workers.values()) {
-      if (w.connected && w.bot && typeof w.bot.chat === 'function') {
-        w.bot.chat(`/gamemode creative ${w.username}`);
-      }
-    }
-
-    // Teleport main bot and workers to build site if needed
-    let neededTeleport = false;
+    // Ensure all connected workers & main bot move to build site safely
+    let neededMove = false;
     if (this.mainBot && this.mainBot.entity && this.mainBot.entity.position.distanceTo(origin) > 8) {
-      if (typeof this.mainBot.chat === 'function') {
-        this.mainBot.chat(`/tp ${this.mainBot.username} ${origin.x} ${origin.y + 1} ${origin.z}`);
-        neededTeleport = true;
+      if (this.mainBot.game?.gameMode === 'creative' && this.mainBot.creative && typeof this.mainBot.creative.flyTo === 'function') {
+        try { await withTimeout(this.mainBot.creative.flyTo(new Vec3(origin.x, origin.y + 1, origin.z)), 2000); } catch (_) {}
+      } else if (this.mainBot.pathfinder) {
+        try {
+          const { goals } = require('mineflayer-pathfinder');
+          this.mainBot.pathfinder.setGoal(new goals.GoalNear(origin.x, origin.y + 1, origin.z, 2));
+        } catch (_) {}
       }
+      neededMove = true;
     }
 
     for (const w of this.workers.values()) {
       if (w.connected && w.bot?.entity && w.bot.entity.position.distanceTo(origin) > 8) {
-        if (typeof this.mainBot?.chat === 'function') {
-          this.mainBot.chat(`/gamemode creative ${w.username}`);
-          this.mainBot.chat(`/tp ${w.username} ${origin.x} ${origin.y + 1} ${origin.z}`);
-          neededTeleport = true;
+        if (w.bot.game?.gameMode === 'creative' && w.bot.creative && typeof w.bot.creative.flyTo === 'function') {
+          try { w.bot.creative.flyTo(new Vec3(origin.x, origin.y + 1, origin.z)); } catch (_) {}
         }
+        neededMove = true;
       }
     }
 
-    if (neededTeleport) {
-      // Allow 1.2s for world chunks to stream in after teleporting to chosen coordinates
-      await new Promise((r) => setTimeout(r, 1200));
+    if (neededMove) {
+      await new Promise((r) => setTimeout(r, 600));
     }
 
     const activeWorkers = Array.from(this.workers.values()).filter((w) => {
