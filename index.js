@@ -1136,6 +1136,11 @@ async function runBuild(requester, offsets, coordInfo = { origin: null, rotation
   safeChat(`/gamemode creative ${BOT_USERNAME}`);
   builder.setJob(shapeName);
   const origin = resolveOrigin(requester, coordInfo.origin);
+  if (bot.entity && bot.entity.position.distanceTo(origin) > 8) {
+    safeChat(`/tp ${BOT_USERNAME} ${origin.x} ${origin.y + 1} ${origin.z}`);
+    safeChat(`/tp @e[type=player,name=BuilderBot*] ${origin.x} ${origin.y + 1} ${origin.z}`);
+    await new Promise((r) => setTimeout(r, 1200));
+  }
   safeChat(`[Builder] Building "${shapeName}" (${offsets.length} blocks, fleet: ${swarm.getWorkerCount()} bots) at ${origin.x} ${origin.y} ${origin.z}...`);
   await executeBuild(offsets, origin);
 }
@@ -1178,6 +1183,11 @@ async function runSchematicBuild(requester, name, coordInfo = { origin: null, ro
   }
   builder.setJob(name);
   const origin = resolveOrigin(requester, coordInfo.origin);
+  if (bot.entity && bot.entity.position.distanceTo(origin) > 8) {
+    safeChat(`/tp ${BOT_USERNAME} ${origin.x} ${origin.y + 1} ${origin.z}`);
+    safeChat(`/tp @e[type=player,name=BuilderBot*] ${origin.x} ${origin.y + 1} ${origin.z}`);
+    await new Promise((r) => setTimeout(r, 1200));
+  }
   const workforce = swarm.getWorkerCount();
   safeChat(
     `[Builder] Building "${name}" (${blocks.length} blocks, rot ${coordInfo.rotation}°, workforce: ${workforce} bots) ` +

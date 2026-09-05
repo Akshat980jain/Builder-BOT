@@ -96,7 +96,7 @@ function rotateProperties(properties, rotation) {
 function finalizeBlocks(rawBlocks, rotation = 0) {
   if (rawBlocks.length === 0) return [];
 
-  // 1. Initial normalization
+  // 1. Initial normalization: anchor the lowest bounding box corner at (0, 0, 0)
   let minX = Infinity, minY = Infinity, minZ = Infinity;
   for (const b of rawBlocks) {
     if (b.pos.x < minX) minX = b.pos.x;
@@ -104,32 +104,18 @@ function finalizeBlocks(rawBlocks, rotation = 0) {
     if (b.pos.z < minZ) minZ = b.pos.z;
   }
 
-  const rotatedList = [];
+  // 2. Apply spatial rotation around the anchor origin (0, 0)
+  // Matches PreviewManager.transformPlan rotation formulas:
+  // 0°: (x, y, z) | 90°: (-z, y, x) | 180°: (-x, y, -z) | 270°: (z, y, -x)
+  const finalBlocks = [];
   for (const b of rawBlocks) {
     const normalized = new Vec3(b.pos.x - minX, b.pos.y - minY, b.pos.z - minZ);
     const rotatedOffset = rotateOffset(normalized, rotation);
     const rotatedProps = rotateProperties(b.properties, rotation);
-    rotatedList.push({
+    finalBlocks.push({
       pos: rotatedOffset,
       name: b.name,
       properties: rotatedProps ?? {},
-    });
-  }
-
-  // 2. Re-normalize after rotation so all coordinates are >= 0 with minY = 0
-  let rMinX = Infinity, rMinY = Infinity, rMinZ = Infinity;
-  for (const b of rotatedList) {
-    if (b.pos.x < rMinX) rMinX = b.pos.x;
-    if (b.pos.y < rMinY) rMinY = b.pos.y;
-    if (b.pos.z < rMinZ) rMinZ = b.pos.z;
-  }
-
-  const finalBlocks = [];
-  for (const b of rotatedList) {
-    finalBlocks.push({
-      pos: new Vec3(b.pos.x - rMinX, b.pos.y - rMinY, b.pos.z - rMinZ),
-      name: b.name,
-      properties: b.properties,
     });
   }
 

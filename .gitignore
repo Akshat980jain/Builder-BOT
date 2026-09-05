@@ -6,7 +6,7 @@ yarn-error.log*
 
 # Gradle & Java build files
 .gradle/
-build/
+/build/
 out/
 .idea/
 *.iml

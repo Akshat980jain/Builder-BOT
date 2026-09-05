@@ -430,24 +430,34 @@ class SwarmManager {
   }
 
   async buildParallel(mainBuilder, blocks, origin, onProgress) {
-    const activeWorkers = Array.from(this.workers.values()).filter((w) => {
-      if (!w.connected || !w.builder || !w.bot || !w.bot.entity) return false;
-      const dist = w.bot.entity.position.distanceTo(origin);
-      if (dist > 64) {
-        console.log(`[Swarm] Worker ${w.username} is ${dist.toFixed(0)}m away from build site. Skipping from this build.`);
-        return false;
+    // Ensure all connected workers & main bot are teleported directly to build site origin
+    let neededTeleport = false;
+    if (this.mainBot && this.mainBot.entity && this.mainBot.entity.position.distanceTo(origin) > 8) {
+      if (typeof this.mainBot.chat === 'function') {
+        this.mainBot.chat(`/gamemode creative ${this.mainBot.username}`);
+        this.mainBot.chat(`/tp ${this.mainBot.username} ${origin.x} ${origin.y + 1} ${origin.z}`);
+        neededTeleport = true;
       }
-      return true;
-    });
-
-    const farWorkers = Array.from(this.workers.values()).filter(
-      (w) => w.connected && w.bot?.entity && w.bot.entity.position.distanceTo(origin) > 64
-    );
-    if (farWorkers.length > 0 && this.mainBot && typeof this.mainBot.chat === 'function') {
-      try {
-        this.mainBot.chat(`[Swarm] ⚠ Note: ${farWorkers.length} worker bots are far away! Run: /tp @e[type=player,name=BuilderBot*] ~ ~ ~ to bring fleet.`);
-      } catch (_) {}
     }
+
+    for (const w of this.workers.values()) {
+      if (w.connected && w.bot?.entity && w.bot.entity.position.distanceTo(origin) > 8) {
+        if (typeof this.mainBot?.chat === 'function') {
+          this.mainBot.chat(`/gamemode creative ${w.username}`);
+          this.mainBot.chat(`/tp ${w.username} ${origin.x} ${origin.y + 1} ${origin.z}`);
+          neededTeleport = true;
+        }
+      }
+    }
+
+    if (neededTeleport) {
+      // Allow 1.2s for world chunks to stream in after teleporting to chosen coordinates
+      await new Promise((r) => setTimeout(r, 1200));
+    }
+
+    const activeWorkers = Array.from(this.workers.values()).filter((w) => {
+      return w.connected && w.builder && w.bot && w.bot.entity;
+    });
 
     const totalWorkers = 1 + activeWorkers.length;
 

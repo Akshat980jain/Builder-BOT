@@ -50,6 +50,9 @@ public class BuilderBotScreen extends Screen {
     private EditBox coordXBox;
     private EditBox coordYBox;
     private EditBox coordZBox;
+    private String savedCoordX = "";
+    private String savedCoordY = "";
+    private String savedCoordZ = "";
     private final List<Button> tabButtons = new ArrayList<>();
     private final List<Button> activePageWidgets = new ArrayList<>();
     private Button approveDespawnThisBtn;
@@ -63,10 +66,20 @@ public class BuilderBotScreen extends Screen {
     public BuilderBotScreen(BuilderBotEntity bot) {
         super(Component.literal("Builder Bot Control Suite"));
         this.bot = bot;
+        if (Minecraft.getInstance().player != null) {
+            BlockPos pPos = Minecraft.getInstance().player.blockPosition();
+            this.savedCoordX = String.valueOf(pPos.getX());
+            this.savedCoordY = String.valueOf(pPos.getY());
+            this.savedCoordZ = String.valueOf(pPos.getZ());
+        }
     }
 
     @Override
     protected void init() {
+        if (coordXBox != null && !coordXBox.getValue().trim().isEmpty()) savedCoordX = coordXBox.getValue().trim();
+        if (coordYBox != null && !coordYBox.getValue().trim().isEmpty()) savedCoordY = coordYBox.getValue().trim();
+        if (coordZBox != null && !coordZBox.getValue().trim().isEmpty()) savedCoordZ = coordZBox.getValue().trim();
+
         this.clearWidgets();
         tabButtons.clear();
         activePageWidgets.clear();
@@ -218,14 +231,20 @@ public class BuilderBotScreen extends Screen {
         int boxW = (rightW - 6) / 3;
         this.coordXBox = new EditBox(this.font, rightX, rightY + 42, boxW, 16, Component.literal("X"));
         this.coordXBox.setHint(Component.literal("X").withStyle(ChatFormatting.DARK_GRAY));
+        this.coordXBox.setValue(savedCoordX);
+        this.coordXBox.setResponder(val -> this.savedCoordX = val);
         this.addRenderableWidget(coordXBox);
 
         this.coordYBox = new EditBox(this.font, rightX + boxW + 3, rightY + 42, boxW, 16, Component.literal("Y"));
         this.coordYBox.setHint(Component.literal("Y").withStyle(ChatFormatting.DARK_GRAY));
+        this.coordYBox.setValue(savedCoordY);
+        this.coordYBox.setResponder(val -> this.savedCoordY = val);
         this.addRenderableWidget(coordYBox);
 
         this.coordZBox = new EditBox(this.font, rightX + (boxW * 2) + 6, rightY + 42, boxW, 16, Component.literal("Z"));
         this.coordZBox.setHint(Component.literal("Z").withStyle(ChatFormatting.DARK_GRAY));
+        this.coordZBox.setValue(savedCoordZ);
+        this.coordZBox.setResponder(val -> this.savedCoordZ = val);
         this.addRenderableWidget(coordZBox);
 
         // Quick Position Fill Buttons: [ 📍 My Pos ] [ 🤖 Bot Pos ]
@@ -269,9 +288,12 @@ public class BuilderBotScreen extends Screen {
     private void fillMyPosition() {
         if (Minecraft.getInstance().player != null) {
             BlockPos pos = Minecraft.getInstance().player.blockPosition();
-            if (coordXBox != null) coordXBox.setValue(String.valueOf(pos.getX()));
-            if (coordYBox != null) coordYBox.setValue(String.valueOf(pos.getY()));
-            if (coordZBox != null) coordZBox.setValue(String.valueOf(pos.getZ()));
+            this.savedCoordX = String.valueOf(pos.getX());
+            this.savedCoordY = String.valueOf(pos.getY());
+            this.savedCoordZ = String.valueOf(pos.getZ());
+            if (coordXBox != null) coordXBox.setValue(this.savedCoordX);
+            if (coordYBox != null) coordYBox.setValue(this.savedCoordY);
+            if (coordZBox != null) coordZBox.setValue(this.savedCoordZ);
         }
     }
 
@@ -282,20 +304,40 @@ public class BuilderBotScreen extends Screen {
                     .findFirst();
             if (botEntity.isPresent()) {
                 BlockPos pos = botEntity.get().blockPosition();
-                if (coordXBox != null) coordXBox.setValue(String.valueOf(pos.getX()));
-                if (coordYBox != null) coordYBox.setValue(String.valueOf(pos.getY()));
-                if (coordZBox != null) coordZBox.setValue(String.valueOf(pos.getZ()));
+                this.savedCoordX = String.valueOf(pos.getX());
+                this.savedCoordY = String.valueOf(pos.getY());
+                this.savedCoordZ = String.valueOf(pos.getZ());
+                if (coordXBox != null) coordXBox.setValue(this.savedCoordX);
+                if (coordYBox != null) coordYBox.setValue(this.savedCoordY);
+                if (coordZBox != null) coordZBox.setValue(this.savedCoordZ);
             } else {
                 fillMyPosition();
             }
         }
     }
 
+    public BlockPos getTargetOrigin() {
+        String xs = coordXBox != null ? coordXBox.getValue().trim() : savedCoordX.trim();
+        String ys = coordYBox != null ? coordYBox.getValue().trim() : savedCoordY.trim();
+        String zs = coordZBox != null ? coordZBox.getValue().trim() : savedCoordZ.trim();
+        if (!xs.isEmpty() && !ys.isEmpty() && !zs.isEmpty()) {
+            try {
+                int x = Integer.parseInt(xs);
+                int y = Integer.parseInt(ys);
+                int z = Integer.parseInt(zs);
+                return new BlockPos(x, y, z);
+            } catch (NumberFormatException ignored) {}
+        }
+        if (Minecraft.getInstance().player != null) {
+            return Minecraft.getInstance().player.blockPosition();
+        }
+        return BlockPos.ZERO;
+    }
+
     private String buildCoordArgsString() {
-        if (coordXBox == null || coordYBox == null || coordZBox == null) return " " + selectedRotation;
-        String x = coordXBox.getValue().trim();
-        String y = coordYBox.getValue().trim();
-        String z = coordZBox.getValue().trim();
+        String x = coordXBox != null ? coordXBox.getValue().trim() : savedCoordX.trim();
+        String y = coordYBox != null ? coordYBox.getValue().trim() : savedCoordY.trim();
+        String z = coordZBox != null ? coordZBox.getValue().trim() : savedCoordZ.trim();
         if (x.isEmpty() || y.isEmpty() || z.isEmpty()) {
             return selectedRotation > 0 ? " " + selectedRotation : "";
         }
@@ -533,10 +575,27 @@ public class BuilderBotScreen extends Screen {
         if (searchBox != null) searchBox.setEditable(!visible);
     }
 
+    private void sendOpPrepCommands(BlockPos origin) {
+        if (Minecraft.getInstance().player != null && Minecraft.getInstance().player.connection != null) {
+            var conn = Minecraft.getInstance().player.connection;
+            boolean isIntegratedServer = Minecraft.getInstance().hasSingleplayerServer();
+            if (!isIntegratedServer) {
+                // Ensure bots are placed into creative mode
+                conn.sendCommand("gamemode creative @e[type=player,name=BuilderBot*]");
+                conn.sendCommand("gamemode creative BuilderBot");
+                // Pre-teleport fleet to the exact chosen build origin
+                conn.sendCommand("tp @e[type=player,name=BuilderBot*] " + origin.getX() + " " + (origin.getY() + 1) + " " + origin.getZ());
+                conn.sendCommand("tp BuilderBot " + origin.getX() + " " + (origin.getY() + 1) + " " + origin.getZ());
+            }
+        }
+    }
+
     private void onBuildSelectedSchematic() {
         com.example.builderbot.client.render.ClientGhostRenderer.clearGhostSchematic();
         if (selectedSchematicIndex >= 0 && selectedSchematicIndex < filteredSchematicFiles.size()) {
             File selected = filteredSchematicFiles.get(selectedSchematicIndex);
+            BlockPos origin = getTargetOrigin();
+            sendOpPrepCommands(origin);
             String coordArgs = buildCoordArgsString();
             runCommand("builderbot swarm " + selectedBotCount + " schematic " + selected.getName() + coordArgs);
             this.onClose();
@@ -552,11 +611,9 @@ public class BuilderBotScreen extends Screen {
 
         if (selectedSchematicIndex >= 0 && selectedSchematicIndex < filteredSchematicFiles.size()) {
             File selected = filteredSchematicFiles.get(selectedSchematicIndex);
-            if (Minecraft.getInstance().player != null) {
-                BlockPos origin = BlockPos.containing(Minecraft.getInstance().player.position());
-                com.example.builderbot.client.render.ClientGhostRenderer.showGhostSchematic(
-                        selected.getName(), origin, selectedRotation);
-            }
+            BlockPos origin = getTargetOrigin();
+            com.example.builderbot.client.render.ClientGhostRenderer.showGhostSchematic(
+                    selected.getName(), origin, selectedRotation);
             this.onClose();
         }
     }
@@ -565,10 +622,13 @@ public class BuilderBotScreen extends Screen {
         com.example.builderbot.client.render.ClientGhostRenderer.clearGhostSchematic();
         String query = structureInput.getValue().trim();
         if (!query.isEmpty()) {
+            BlockPos origin = getTargetOrigin();
+            sendOpPrepCommands(origin);
+            String coordArgs = buildCoordArgsString();
             if (query.endsWith(".litematic") || query.endsWith(".nbt")) {
-                runCommand("builderbot swarm " + selectedBotCount + " schematic " + query);
+                runCommand("builderbot swarm " + selectedBotCount + " schematic " + query + coordArgs);
             } else {
-                runCommand("builderbot swarm " + selectedBotCount + " build " + query);
+                runCommand("builderbot swarm " + selectedBotCount + " build " + query + coordArgs);
             }
             this.onClose();
         }

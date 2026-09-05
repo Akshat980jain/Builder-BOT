@@ -321,7 +321,15 @@ class Builder {
 
     // 2. Reach check: Must be within reach distance of refPos (MC reach is ~4.5 blocks, stand at 2.0-3.2)
     const currentDistToRef = bot.entity ? bot.entity.position.distanceTo(refPos) : distToRef;
-    if (currentDistToRef > 3.6) {
+    if (currentDistToRef > 6.0 && typeof bot.chat === 'function') {
+      const standX = refPos.x + (refPos.x > (bot.entity?.position.x || 0) ? -1.8 : 1.8);
+      const standZ = refPos.z + (refPos.z > (bot.entity?.position.z || 0) ? -1.8 : 1.8);
+      bot.chat(`/tp ${bot.username} ${standX.toFixed(1)} ${refPos.y + 1} ${standZ.toFixed(1)}`);
+      await new Promise((r) => setTimeout(r, 400));
+    }
+
+    const distAfterTp = bot.entity ? bot.entity.position.distanceTo(refPos) : distToRef;
+    if (distAfterTp > 3.6) {
       const standX = refPos.x + (refPos.x > (bot.entity?.position.x || 0) ? -1.8 : 1.8);
       const standZ = refPos.z + (refPos.z > (bot.entity?.position.z || 0) ? -1.8 : 1.8);
       const standY = refPos.y;
