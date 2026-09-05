@@ -93,6 +93,14 @@ function rotateProperties(properties, rotation) {
 // Finalize Blocks: Normalization, Rotation & Bottom-to-Top Sorting
 // ---------------------------------------------------------------------------
 
+function formatBlockState(name, properties) {
+  if (!properties || Object.keys(properties).length === 0) return name;
+  const props = Object.entries(properties)
+    .map(([k, v]) => `${k}=${v}`)
+    .join(',');
+  return `${name}[${props}]`;
+}
+
 function finalizeBlocks(rawBlocks, rotation = 0) {
   if (rawBlocks.length === 0) return [];
 
@@ -116,6 +124,7 @@ function finalizeBlocks(rawBlocks, rotation = 0) {
       pos: rotatedOffset,
       name: b.name,
       properties: rotatedProps ?? {},
+      blockState: formatBlockState(b.name, rotatedProps),
     });
   }
 

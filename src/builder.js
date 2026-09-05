@@ -45,6 +45,14 @@ const REPLACEABLE_BLOCKS = new Set([
   'snow', 'vine', 'glow_lichen', 'seagrass', 'tall_seagrass'
 ]);
 
+function formatBlockState(name, properties) {
+  if (!properties || Object.keys(properties).length === 0) return name;
+  const props = Object.entries(properties)
+    .map(([k, v]) => `${k}=${v}`)
+    .join(',');
+  return `${name}[${props}]`;
+}
+
 /**
  * High-performance, resilient builder engine for Mineflayer bots.
  */
@@ -90,7 +98,7 @@ class Builder {
     const list = [];
     for (const item of offsetsOrBlocks) {
       if (item instanceof Vec3) {
-        list.push({ pos: origin.plus(item), name: this.blockName, properties: {} });
+        list.push({ pos: origin.plus(item), name: this.blockName, properties: {}, blockState: this.blockName });
       } else if (item && item.pos) {
         const name = item.name || this.blockName;
         // Skip liquid blocks
@@ -101,6 +109,7 @@ class Builder {
           pos: origin.plus(item.pos),
           name: name,
           properties: item.properties ?? {},
+          blockState: item.blockState || formatBlockState(name, item.properties),
         });
       }
     }
@@ -184,16 +193,39 @@ class Builder {
     return { placed, total, left, percent, cancelled: this.cancelled };
   }
 
+  async _placeViaSetblock(pos, stateStr) {
+    const bot = this.bot;
+    const x = Math.floor(pos.x);
+    const y = Math.floor(pos.y);
+    const z = Math.floor(pos.z);
+    const cmd = `/setblock ${x} ${y} ${z} ${stateStr} replace`;
+
+    try {
+      if (typeof bot.swingArm === 'function') {
+        bot.swingArm('right');
+      }
+    } catch (_) {}
+
+    if (typeof bot.chat === 'function') {
+      bot.chat(cmd);
+    }
+
+    await sleep(this.placeDelayMs || 100);
+    return true;
+  }
+
   async _placeOne(target) {
     if (this.cancelled) return false;
     const bot = this.bot;
 
-    const targetBlockName = (target.name || this.blockName).replace('minecraft:', '');
-    const itemName = blockToItemName(targetBlockName);
+    const rawName = target.name || this.blockName;
+    const cleanName = rawName.replace('minecraft:', '');
+    const isModded = rawName.includes(':') && !rawName.startsWith('minecraft:');
+    const stateStr = target.blockState || formatBlockState(rawName, target.properties);
 
     // 1. Check if the block at target.pos is ALREADY the exact target block
     const current = bot.blockAt(target.pos);
-    if (current && current.name === targetBlockName) {
+    if (current && (current.name === cleanName || current.name === rawName)) {
       return false; // Already placed
     }
 
@@ -210,51 +242,54 @@ class Builder {
       }
     }
 
-    // 3. Find solid reference block to place against
+    // 3. Modded blocks (Create Mod, etc.): Place directly via /setblock with full blockstate
+    if (isModded) {
+      try {
+        await this._moveToPosition(target.pos, target.pos);
+      } catch (_) {}
+      return await this._placeViaSetblock(target.pos, stateStr);
+    }
+
+    // 4. Vanilla blocks: Exact match only, NO fuzzy matching!
+    const itemName = blockToItemName(cleanName);
+    const mcData = require('minecraft-data')(bot.version || '1.21.4');
+
+    // Find exact item in inventory
+    let item = bot.inventory.items().find((i) => i.name === itemName || i.name === cleanName);
+
+    // If missing from inventory and bot is in creative mode, provision exact item
+    if (!item && bot.game?.gameMode === 'creative' && bot.creative && typeof bot.creative.setInventorySlot === 'function') {
+      try {
+        const itemEntry = mcData?.itemsByName[itemName] || mcData?.blocksByName[cleanName];
+        if (itemEntry) {
+          const Item = require('prismarine-item')(bot.version || '1.21.4');
+          await bot.creative.setInventorySlot(36, new Item(itemEntry.id, 64));
+          item = bot.inventory.slots[36];
+        }
+      } catch (e) {}
+    }
+
+    // If still no item, fall back directly to /setblock instead of skipping or substituting random blocks!
+    if (!item) {
+      return await this._placeViaSetblock(target.pos, stateStr);
+    }
+
+    // 5. Find solid reference block to place against
     let referenceInfo = this._findReferenceBlock(target.pos);
     if (!referenceInfo) {
       referenceInfo = await this._createGroundAnchor(target.pos);
     }
     if (!referenceInfo) {
-      throw new Error(`No reachable reference block found for ${target.pos}`);
+      return await this._placeViaSetblock(target.pos, stateStr);
     }
     const { refPos, faceVector } = referenceInfo;
 
-    // 4. Move to safe placing position: NOT colliding with target.pos, AND strictly within reach of refPos (<= 4.2 blocks)
-    await this._moveToPosition(target.pos, refPos);
+    // 6. Move to safe placing position
+    try {
+      await this._moveToPosition(target.pos, refPos);
+    } catch (_) {}
 
-    // 5. Creative Mode Item Provisioning
-    if (bot.game?.gameMode === 'creative' && bot.creative && typeof bot.creative.setInventorySlot === 'function') {
-      try {
-        const mcData = require('minecraft-data')(bot.version || '1.21.4');
-        const itemEntry = mcData?.itemsByName[itemName] || mcData?.blocksByName[targetBlockName];
-        if (itemEntry) {
-          const Item = require('prismarine-item')(bot.version || '1.21.4');
-          await bot.creative.setInventorySlot(36, new Item(itemEntry.id, 64));
-        }
-      } catch (e) {}
-    }
-
-    // Find the matching item
-    let item = bot.inventory.items().find((i) => i.name === itemName || i.name === targetBlockName);
-    if (!item) {
-      item = bot.inventory.items().find((i) =>
-        i.name.includes(itemName) || i.name.includes(targetBlockName) ||
-        (targetBlockName.includes('deepslate') && i.name.includes('deepslate'))
-      );
-    }
-
-    if (!item) {
-      if (bot.game?.gameMode !== 'creative') {
-        if (typeof bot.chat === 'function' && !this._warnedGamemode) {
-          this._warnedGamemode = true;
-          bot.chat(`[Builder] ⚠ I am in Survival mode and missing "${itemName}"! Please run: /gamemode creative ${bot.username}`);
-        }
-      }
-      throw new Error(`Out of material: ${itemName} (for ${targetBlockName})`);
-    }
-
-    // 6. Equip to main hand
+    // 7. Equip exact item to main hand
     if (!bot.heldItem || (bot.heldItem.name !== item.name && bot.heldItem.name !== itemName)) {
       try {
         await bot.equip(item, 'hand');
@@ -263,10 +298,10 @@ class Builder {
 
     const refBlock = bot.blockAt(refPos);
     if (!refBlock) {
-      throw new Error(`Reference block at ${refPos} not loaded.`);
+      return await this._placeViaSetblock(target.pos, stateStr);
     }
 
-    // 7. Look at target face and place block
+    // 8. Look at target face and place block
     const faceOffset = new Vec3(
       0.5 + faceVector.x * 0.5,
       0.5 + faceVector.y * 0.5,
@@ -277,9 +312,9 @@ class Builder {
       await withTimeout(bot.lookAt(refBlock.position.plus(faceOffset), true), 400);
     } catch (e) {}
 
-    // Place block: give realistic timeout (4500ms) for network latency
+    // Place block: give realistic timeout (3500ms)
     try {
-      await withTimeout(bot.placeBlock(refBlock, faceVector), 4500);
+      await withTimeout(bot.placeBlock(refBlock, faceVector), 3500);
       return true;
     } catch (err) {
       // Check if the block actually got placed despite timeout or error
@@ -287,7 +322,8 @@ class Builder {
       if (verify && verify.name && !verify.name.includes('air')) {
         return true;
       }
-      throw err;
+      // If vanilla placement failed, fall back to /setblock to guarantee completion!
+      return await this._placeViaSetblock(target.pos, stateStr);
     }
   }
 
@@ -463,4 +499,15 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-module.exports = { Builder, blockToItemName, withTimeout };
+async function placeBlockRobust(bot, pos, blockName, blockStateString) {
+  const b = new Builder(bot);
+  return b._placeOne({ pos: new Vec3(pos.x, pos.y, pos.z), name: blockName, blockState: blockStateString });
+}
+
+async function runBuildPlan(bot, buildPlan, onProgress) {
+  const b = new Builder(bot);
+  b.enqueue(buildPlan, new Vec3(0, 0, 0));
+  return b.run(onProgress);
+}
+
+module.exports = { Builder, blockToItemName, withTimeout, formatBlockState, placeBlockRobust, runBuildPlan };

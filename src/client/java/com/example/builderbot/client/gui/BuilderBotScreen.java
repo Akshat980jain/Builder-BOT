@@ -50,9 +50,9 @@ public class BuilderBotScreen extends Screen {
     private EditBox coordXBox;
     private EditBox coordYBox;
     private EditBox coordZBox;
-    private String savedCoordX = "";
-    private String savedCoordY = "";
-    private String savedCoordZ = "";
+    private static String savedCoordX = "";
+    private static String savedCoordY = "";
+    private static String savedCoordZ = "";
     private final List<Button> tabButtons = new ArrayList<>();
     private final List<Button> activePageWidgets = new ArrayList<>();
     private Button approveDespawnThisBtn;
@@ -66,11 +66,13 @@ public class BuilderBotScreen extends Screen {
     public BuilderBotScreen(BuilderBotEntity bot) {
         super(Component.literal("Builder Bot Control Suite"));
         this.bot = bot;
-        if (Minecraft.getInstance().player != null) {
-            BlockPos pPos = Minecraft.getInstance().player.blockPosition();
-            this.savedCoordX = String.valueOf(pPos.getX());
-            this.savedCoordY = String.valueOf(pPos.getY());
-            this.savedCoordZ = String.valueOf(pPos.getZ());
+        if (savedCoordX.isEmpty() && savedCoordY.isEmpty() && savedCoordZ.isEmpty()) {
+            if (Minecraft.getInstance().player != null) {
+                BlockPos pPos = Minecraft.getInstance().player.blockPosition();
+                savedCoordX = String.valueOf(pPos.getX());
+                savedCoordY = String.valueOf(pPos.getY());
+                savedCoordZ = String.valueOf(pPos.getZ());
+            }
         }
     }
 
@@ -328,10 +330,7 @@ public class BuilderBotScreen extends Screen {
                 return new BlockPos(x, y, z);
             } catch (NumberFormatException ignored) {}
         }
-        if (Minecraft.getInstance().player != null) {
-            return Minecraft.getInstance().player.blockPosition();
-        }
-        return BlockPos.ZERO;
+        return null;
     }
 
     private String buildCoordArgsString() {
@@ -595,6 +594,13 @@ public class BuilderBotScreen extends Screen {
         if (selectedSchematicIndex >= 0 && selectedSchematicIndex < filteredSchematicFiles.size()) {
             File selected = filteredSchematicFiles.get(selectedSchematicIndex);
             BlockPos origin = getTargetOrigin();
+            if (origin == null) {
+                if (Minecraft.getInstance().player != null) {
+                    Minecraft.getInstance().player.sendSystemMessage(
+                        Component.literal("§c[BuilderBot] Please enter valid X, Y, Z coordinates before building!"));
+                }
+                return;
+            }
             sendOpPrepCommands(origin);
             String coordArgs = buildCoordArgsString();
             runCommand("builderbot swarm " + selectedBotCount + " schematic " + selected.getName() + coordArgs);
@@ -612,6 +618,13 @@ public class BuilderBotScreen extends Screen {
         if (selectedSchematicIndex >= 0 && selectedSchematicIndex < filteredSchematicFiles.size()) {
             File selected = filteredSchematicFiles.get(selectedSchematicIndex);
             BlockPos origin = getTargetOrigin();
+            if (origin == null) {
+                if (Minecraft.getInstance().player != null) {
+                    Minecraft.getInstance().player.sendSystemMessage(
+                        Component.literal("§c[BuilderBot] Please enter valid X, Y, Z coordinates before previewing!"));
+                }
+                return;
+            }
             com.example.builderbot.client.render.ClientGhostRenderer.showGhostSchematic(
                     selected.getName(), origin, selectedRotation);
             this.onClose();
@@ -623,6 +636,13 @@ public class BuilderBotScreen extends Screen {
         String query = structureInput.getValue().trim();
         if (!query.isEmpty()) {
             BlockPos origin = getTargetOrigin();
+            if (origin == null) {
+                if (Minecraft.getInstance().player != null) {
+                    Minecraft.getInstance().player.sendSystemMessage(
+                        Component.literal("§c[BuilderBot] Please enter valid X, Y, Z coordinates before building!"));
+                }
+                return;
+            }
             sendOpPrepCommands(origin);
             String coordArgs = buildCoordArgsString();
             if (query.endsWith(".litematic") || query.endsWith(".nbt")) {
