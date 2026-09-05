@@ -22,9 +22,9 @@ import java.util.List;
 @Environment(EnvType.CLIENT)
 public class BuilderBotScreen extends Screen {
 
-    private final BuilderBotEntity bot;
+    private final net.minecraft.world.entity.Entity bot;
 
-    // Tabs: 0 = Schematics, 1 = Procedural Shapes, 2 = Swarm & Tools
+    // Tabs: 0 = Schematics, 1 = Swarm Fleet & Tools
     private int currentTab = 0;
 
     // Schematics list & scrolling
@@ -63,16 +63,27 @@ public class BuilderBotScreen extends Screen {
     private int winX, winY, winW, winH;
     private int listX, listY, listW, listH;
 
-    public BuilderBotScreen(BuilderBotEntity bot) {
+    public BuilderBotScreen(net.minecraft.world.entity.Entity bot) {
         super(Component.literal("Builder Bot Control Suite"));
         this.bot = bot;
-        if (savedCoordX.isEmpty() && savedCoordY.isEmpty() && savedCoordZ.isEmpty()) {
-            if (Minecraft.getInstance().player != null) {
-                BlockPos pPos = Minecraft.getInstance().player.blockPosition();
-                savedCoordX = String.valueOf(pPos.getX());
-                savedCoordY = String.valueOf(pPos.getY());
-                savedCoordZ = String.valueOf(pPos.getZ());
-            }
+
+        // Auto-detect the bot's position so the preview and build land exactly where the bot is standing!
+        BlockPos botPos = null;
+        if (bot != null) {
+            botPos = bot.blockPosition();
+        } else {
+            botPos = findBotPosition();
+        }
+
+        if (botPos != null) {
+            savedCoordX = String.valueOf(botPos.getX());
+            savedCoordY = String.valueOf(botPos.getY());
+            savedCoordZ = String.valueOf(botPos.getZ());
+        } else if (savedCoordX.isEmpty() && Minecraft.getInstance().player != null) {
+            BlockPos pPos = Minecraft.getInstance().player.blockPosition();
+            savedCoordX = String.valueOf(pPos.getX());
+            savedCoordY = String.valueOf(pPos.getY());
+            savedCoordZ = String.valueOf(pPos.getZ());
         }
     }
 
@@ -99,33 +110,25 @@ public class BuilderBotScreen extends Screen {
         loadSchematics();
 
         // ── TOP TAB NAVIGATION BUTTONS ────────────────────────────────────────
-        int tabW = (winW - 28) / 3;
+        int tabW = (winW - 28) / 2;
         Button tab0Btn = Button.builder(
-                Component.literal("📁 Schematics").withStyle(currentTab == 0 ? ChatFormatting.GOLD : ChatFormatting.GRAY),
+                Component.literal("📁 Schematics (NBT / Litematica)").withStyle(currentTab == 0 ? ChatFormatting.GOLD : ChatFormatting.GRAY),
                 btn -> { currentTab = 0; this.init(); }
         ).bounds(winX + 14, winY + 28, tabW, 18).build();
         tabButtons.add(tab0Btn);
         this.addRenderableWidget(tab0Btn);
 
         Button tab1Btn = Button.builder(
-                Component.literal("🏛 Shapes Gen").withStyle(currentTab == 1 ? ChatFormatting.GOLD : ChatFormatting.GRAY),
+                Component.literal("⚙ Swarm Fleet & Tools").withStyle(currentTab == 1 ? ChatFormatting.GOLD : ChatFormatting.GRAY),
                 btn -> { currentTab = 1; this.init(); }
         ).bounds(winX + 14 + tabW, winY + 28, tabW, 18).build();
         tabButtons.add(tab1Btn);
         this.addRenderableWidget(tab1Btn);
 
-        Button tab2Btn = Button.builder(
-                Component.literal("⚙ Swarm & Tools").withStyle(currentTab == 2 ? ChatFormatting.GOLD : ChatFormatting.GRAY),
-                btn -> { currentTab = 2; this.init(); }
-        ).bounds(winX + 14 + (tabW * 2), winY + 28, tabW, 18).build();
-        tabButtons.add(tab2Btn);
-        this.addRenderableWidget(tab2Btn);
-
         // ── BUILD ACTIVE TAB CONTENT ──────────────────────────────────────────
         switch (currentTab) {
             case 0 -> initSchematicsTab();
-            case 1 -> initShapesTab();
-            case 2 -> initToolsTab();
+            case 1 -> initToolsTab();
         }
 
         // Bottom Bar: Close Button
@@ -299,22 +302,33 @@ public class BuilderBotScreen extends Screen {
         }
     }
 
-    private void fillBotPosition() {
-        if (Minecraft.getInstance().level != null && Minecraft.getInstance().player != null) {
-            var botEntity = Minecraft.getInstance().level.players().stream()
-                    .filter(p -> p.getName().getString().toLowerCase().contains("builderbot"))
+    public static BlockPos findBotPosition() {
+        if (Minecraft.getInstance().level != null) {
+            var botOpt = Minecraft.getInstance().level.players().stream()
+                    .filter(p -> {
+                        if (p == Minecraft.getInstance().player) return false;
+                        String name = p.getName().getString().toLowerCase();
+                        return name.contains("builderbot") || name.contains("builder");
+                    })
                     .findFirst();
-            if (botEntity.isPresent()) {
-                BlockPos pos = botEntity.get().blockPosition();
-                this.savedCoordX = String.valueOf(pos.getX());
-                this.savedCoordY = String.valueOf(pos.getY());
-                this.savedCoordZ = String.valueOf(pos.getZ());
-                if (coordXBox != null) coordXBox.setValue(this.savedCoordX);
-                if (coordYBox != null) coordYBox.setValue(this.savedCoordY);
-                if (coordZBox != null) coordZBox.setValue(this.savedCoordZ);
-            } else {
-                fillMyPosition();
+            if (botOpt.isPresent()) {
+                return botOpt.get().blockPosition();
             }
+        }
+        return null;
+    }
+
+    private void fillBotPosition() {
+        BlockPos pos = (this.bot != null) ? this.bot.blockPosition() : findBotPosition();
+        if (pos != null) {
+            this.savedCoordX = String.valueOf(pos.getX());
+            this.savedCoordY = String.valueOf(pos.getY());
+            this.savedCoordZ = String.valueOf(pos.getZ());
+            if (coordXBox != null) coordXBox.setValue(this.savedCoordX);
+            if (coordYBox != null) coordYBox.setValue(this.savedCoordY);
+            if (coordZBox != null) coordZBox.setValue(this.savedCoordZ);
+        } else {
+            fillMyPosition();
         }
     }
 
@@ -330,6 +344,13 @@ public class BuilderBotScreen extends Screen {
                 return new BlockPos(x, y, z);
             } catch (NumberFormatException ignored) {}
         }
+        BlockPos botPos = (this.bot != null) ? this.bot.blockPosition() : findBotPosition();
+        if (botPos != null) {
+            return botPos;
+        }
+        if (Minecraft.getInstance().player != null) {
+            return Minecraft.getInstance().player.blockPosition();
+        }
         return null;
     }
 
@@ -343,70 +364,7 @@ public class BuilderBotScreen extends Screen {
         return " " + x + " " + y + " " + z + " " + selectedRotation;
     }
 
-    // ── TAB 1: PROCEDURAL SHAPES GENERATOR ───────────────────────────────────
-    private void initShapesTab() {
-        int leftX = winX + 14;
-        int rightX = winX + 212;
-        int btnW = 185;
-        int startY = winY + 54;
-
-        // Workforce Stepper at top
-        initWorkforceStepper(rightX, startY, btnW);
-
-        // Pyramids
-        Button pyramid16 = Button.builder(
-                Component.literal("🔺 Pyramid (16x16)"),
-                btn -> { runCommand("builderbot generate pyramid 16"); this.onClose(); }
-        ).bounds(leftX, startY, btnW, 20).build();
-        addPageWidget(pyramid16);
-
-        Button pyramid32 = Button.builder(
-                Component.literal("🔺 Mega Pyramid (32x32)"),
-                btn -> { runCommand("builderbot generate pyramid 32"); this.onClose(); }
-        ).bounds(leftX, startY + 24, btnW, 20).build();
-        addPageWidget(pyramid32);
-
-        // Domes
-        Button dome8 = Button.builder(
-                Component.literal("🔮 Glass Dome (Radius 8)"),
-                btn -> { runCommand("builderbot generate dome 8"); this.onClose(); }
-        ).bounds(leftX, startY + 48, btnW, 20).build();
-        addPageWidget(dome8);
-
-        Button dome16 = Button.builder(
-                Component.literal("🔮 Mega Dome (Radius 16)"),
-                btn -> { runCommand("builderbot generate dome 16"); this.onClose(); }
-        ).bounds(leftX, startY + 72, btnW, 20).build();
-        addPageWidget(dome16);
-
-        // Castle Watchtower & Spiral Stairs
-        Button towerBtn = Button.builder(
-                Component.literal("🏰 Castle Tower (r=5, h=24)"),
-                btn -> { runCommand("builderbot generate tower 5 24"); this.onClose(); }
-        ).bounds(rightX, startY + 24, btnW, 20).build();
-        addPageWidget(towerBtn);
-
-        Button stairsBtn = Button.builder(
-                Component.literal("🌀 Spiral Stairs (r=4, h=20)"),
-                btn -> { runCommand("builderbot generate stairs 4 20"); this.onClose(); }
-        ).bounds(rightX, startY + 48, btnW, 20).build();
-        addPageWidget(stairsBtn);
-
-        // Test Cubes
-        Button testCube4 = Button.builder(
-                Component.literal("🧪 Cube (4x4)"),
-                btn -> { runCommand("builderbot swarm " + selectedBotCount + " testbuild 4"); this.onClose(); }
-        ).bounds(rightX, startY + 72, (btnW / 2) - 2, 20).build();
-        addPageWidget(testCube4);
-
-        Button testCube8 = Button.builder(
-                Component.literal("🧪 Cube (8x8)"),
-                btn -> { runCommand("builderbot swarm " + selectedBotCount + " testbuild 8"); this.onClose(); }
-        ).bounds(rightX + (btnW / 2) + 2, startY + 72, (btnW / 2) - 2, 20).build();
-        addPageWidget(testCube8);
-    }
-
-    // ── TAB 2: SWARM CONTROLS, EXCAVATION & UNDO ─────────────────────────────
+    // ── TAB 1: SWARM CONTROLS, FLEET & UNDO ─────────────────────────────
     private void initToolsTab() {
         int leftX = winX + 14;
         int rightX = winX + 212;
@@ -437,13 +395,13 @@ public class BuilderBotScreen extends Screen {
         addPageWidget(clearArea32);
 
         // Flight Mode Toggle
-        boolean isFlying = bot != null && bot.isFlying();
+        boolean isFlying = (bot instanceof BuilderBotEntity b) && b.isFlying();
         Button toggleFlyBtn = Button.builder(
                 Component.literal(isFlying ? "🕊 Flight: ENABLED" : "🚶 Flight: DISABLED")
                         .withStyle(isFlying ? ChatFormatting.AQUA : ChatFormatting.GRAY),
                 btn -> {
                     runCommand("builderbot fly");
-                    boolean nowFlying = bot != null && !bot.isFlying();
+                    boolean nowFlying = (bot instanceof BuilderBotEntity b) && !b.isFlying();
                     btn.setMessage(Component.literal(nowFlying ? "🕊 Flight: ENABLED" : "🚶 Flight: DISABLED")
                             .withStyle(nowFlying ? ChatFormatting.AQUA : ChatFormatting.GRAY));
                 }
@@ -663,21 +621,8 @@ public class BuilderBotScreen extends Screen {
                 // In singleplayer, the mod is installed on the internal server
                 conn.sendCommand(command);
             } else {
-                // On a multiplayer server (Aternos/Vanilla), do NOT send unregistered /builderbot commands
-                // Translate directly into in-game bot chat commands so no red errors appear!
-                if (command.startsWith("builderbot generate pyramid ")) {
-                    String size = command.substring("builderbot generate pyramid ".length()).trim();
-                    conn.sendChat("!pyramid " + size);
-                } else if (command.startsWith("builderbot generate dome ")) {
-                    String r = command.substring("builderbot generate dome ".length()).trim();
-                    conn.sendChat("!dome " + r);
-                } else if (command.startsWith("builderbot generate tower ")) {
-                    String args = command.substring("builderbot generate tower ".length()).trim();
-                    conn.sendChat("!tower " + args);
-                } else if (command.startsWith("builderbot generate stairs ")) {
-                    String args = command.substring("builderbot generate stairs ".length()).trim();
-                    conn.sendChat("!stairs " + args);
-                } else if (command.equals("builderbot undo") || command.contains("undo")) {
+                // On a multiplayer server (Aternos/Vanilla), translate directly into in-game bot chat commands
+                if (command.equals("builderbot undo") || command.contains("undo")) {
                     conn.sendChat("!undo");
                 } else if (command.equals("builderbot stop") || command.equals("builderbot stopall")) {
                     conn.sendChat("!stop");
@@ -717,7 +662,7 @@ public class BuilderBotScreen extends Screen {
         guiGraphics.text(this.font, "🤖 BUILDER BOT CONTROL SUITE", winX + 12, winY + 8, 0xFFF59E0B);
 
         // Status Card
-        BuildPlan plan = bot != null ? bot.getCurrentPlan() : null;
+        BuildPlan plan = (bot instanceof BuilderBotEntity b) ? b.getCurrentPlan() : null;
         boolean isBuilding = plan != null && !plan.isEmpty();
         if (isBuilding) {
             String statusText = String.format("🔨 Building: %d/%d blocks (%d%%)",

@@ -35,7 +35,6 @@ try {
   };
 }
 
-const { pyramid, tower, dome } = require('./src/shapes');
 const { Builder } = require('./src/builder');
 const { SwarmManager } = require('./src/swarm');
 const { installChatCompat } = require('./src/chatCompat');
@@ -143,34 +142,6 @@ app.post('/api/swarm/stop', (req, res) => {
   if (swarm) swarm.cancelAll();
   if (builder) builder.cancel();
   res.json({ success: true, message: 'Swarm operations stopped.' });
-});
-
-app.post('/api/build/shape', async (req, res) => {
-  const { shape, size = 5, r = 6, h = 10 } = req.body;
-  if (!builder) {
-    return res.status(400).json({ error: 'Builder is not connected' });
-  }
-
-  let offsets;
-  let name = shape;
-  if (shape === 'pyramid') offsets = pyramid(Number(size));
-  else if (shape === 'dome') offsets = dome(Number(r));
-  else if (shape === 'tower') offsets = tower(Number(r), Number(h));
-  else {
-    return res.status(400).json({ error: `Unknown shape: "${shape}". Valid shapes: pyramid, dome, tower.` });
-  }
-
-  if (builder.isBuilding()) {
-    logSystem(`[Build] Cancelling previous build to start new shape "${name}"`);
-    builder.cancel();
-    if (swarm) swarm.cancelAll();
-    await new Promise((r) => setTimeout(r, 300));
-  }
-
-  const origin = bot?.entity ? bot.entity.position.floored() : new Vec3(0, 64, 0);
-  builder.setJob(name);
-  executeBuild(offsets, origin);
-  res.json({ ok: true, message: `Building ${name} with ${offsets.length} blocks...` });
 });
 
 app.get('/api/schematics', (req, res) => {
@@ -405,14 +376,8 @@ app.get('/', (req, res) => {
         </div>
 
         <div class="card">
-          <h2>🏛️ Quick Geometric Shapes</h2>
-          <p style="color: var(--text-muted); font-size: 13px; margin-bottom: 16px;">Build structures in parallel with all active swarm bots:</p>
-          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-bottom: 16px;">
-            <button class="cmd-btn" onclick="buildShape('pyramid', 7)">▲ Pyramid (7x7)</button>
-            <button class="cmd-btn" onclick="buildShape('dome', 6)">● Dome (r=6)</button>
-            <button class="cmd-btn" onclick="buildShape('tower', 2, 12)">🗼 Tower (h=12)</button>
-          </div>
           <h2>📁 Upload New Schematic</h2>
+          <p style="color: var(--text-muted); font-size: 13px; margin-bottom: 16px;">Upload a .litematic or .nbt structure file to build:</p>
           <input type="file" id="schemFile" accept=".litematic,.nbt,.schematic,.schem" style="margin-bottom: 12px; color: var(--text-muted); width: 100%;">
           <button class="cmd-btn" style="background: rgba(255,255,255,0.1); color: #fff;" onclick="uploadSchematic()">Upload to Server</button>
         </div>
@@ -425,7 +390,7 @@ app.get('/', (req, res) => {
         <h2>📜 Live Console & Commands</h2>
         <div id="terminal" class="terminal"></div>
         <div class="cmd-bar">
-          <input id="cmdInput" class="cmd-input" type="text" placeholder="Type in-game command (e.g. !pyramid, !status, !stop, !swarm 10)..." onkeydown="if(event.key==='Enter') executeCommand()">
+          <input id="cmdInput" class="cmd-input" type="text" placeholder="Type in-game command (e.g. !schematic <name>, !status, !stop, !swarm 10)..." onkeydown="if(event.key==='Enter') executeCommand()">
           <button class="cmd-btn" onclick="executeCommand()">Send</button>
         </div>
       </div>
@@ -532,15 +497,6 @@ app.get('/', (req, res) => {
     async function stopAllSwarm() {
       await fetch('/api/swarm/stop', { method: 'POST' });
       setTimeout(updateFleetStatus, 800);
-    }
-
-    async function buildShape(shape, size, h) {
-      await fetch('/api/build/shape', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ shape, size, r: size, h })
-      });
-      alert('Dispatched ' + shape + ' build to swarm fleet!');
     }
 
     async function loadSchematicsList() {
@@ -806,7 +762,7 @@ function createBot() {
       }
     }, 20000);
 
-    safeChat(`[BuilderBot] Online! Commands: !pyramid <size>, !dome <r>, !tower <r> <h>, !schematic <name>, !swarm <count>, !status, !come, !stop`);
+    safeChat(`[BuilderBot] Online! Commands: !schematic <name> [x y z] [rot], !schematics, !build <name>, !swarm <count>, !status, !come, !stop`);
   });
 
   let lastCmdTime = 0;
@@ -943,6 +899,10 @@ function parseCoordsAndRotation(args) {
 
 function resolveOrigin(requester, explicitOrigin) {
   if (explicitOrigin) return explicitOrigin;
+  // Always default to the bot's current exact position
+  if (bot.entity) {
+    return bot.entity.position.floored();
+  }
   let player = bot.players[requester]?.entity;
   if (!player) {
     player = Object.values(bot.entities).find(
@@ -950,18 +910,7 @@ function resolveOrigin(requester, explicitOrigin) {
     );
   }
   if (player) {
-    const yaw = player.yaw || 0;
-    const fx = Math.round(-Math.sin(yaw) * 4);
-    const fz = Math.round(Math.cos(yaw) * 4);
-    return player.position.floored().offset(fx, 0, fz);
-  }
-  if (bot.entity) {
-    const yaw = bot.entity.yaw || 0;
-    const fx = Math.round(-Math.sin(yaw) * 4);
-    const fz = Math.round(Math.cos(yaw) * 4);
-    const bPos = bot.entity.position.floored().offset(fx, 0, fz);
-    safeChat(`[Builder] Notice: Player "${requester}" is not nearby. Building at bot's location (${bPos.x}, ${bPos.y}, ${bPos.z}). Use !come to bring me to you!`);
-    return bPos;
+    return player.position.floored();
   }
   return new Vec3(0, 64, 0);
 }
@@ -1045,26 +994,9 @@ async function handleChatLine(username, text) {
       safeChat(`[Swarm] Active Bots (${list.length}/10): ` + list.map((b) => `${b.username} [${b.state}]`).join(' | '));
       return;
     }
-    case 'pyramid': {
-      const pyrSize = parseInt(args[0], 10) || 5;
-      return runBuild(username, pyramid(pyrSize), parseCoordsAndRotation(args.slice(1)), `Pyramid (${pyrSize}x${pyrSize})`);
-    }
-    case 'dome': {
-      const domeR = parseInt(args[0], 10) || 6;
-      return runBuild(username, dome(domeR), parseCoordsAndRotation(args.slice(1)), `Dome (r=${domeR})`);
-    }
-    case 'tower': {
-      const tR = parseInt(args[0], 10) || 2;
-      const tH = parseInt(args[1], 10) || 10;
-      return runBuild(username, tower(tR, tH), parseCoordsAndRotation(args.slice(2)), `Tower (r=${tR}, h=${tH})`);
-    }
-    case 'stairs': {
-      const sW = parseInt(args[0], 10) || 3;
-      const sH = parseInt(args[1], 10) || 12;
-      return runBuild(username, tower(sW, sH), parseCoordsAndRotation(args.slice(2)), `Staircase (w=${sW}, h=${sH})`);
-    }
     case 'schematics':
-    case 'schematic': {
+    case 'schematic':
+    case 'build': {
       if (args.length === 0 || args[0].toLowerCase() === 'list' || args[0].toLowerCase() === 'options' || args[0].toLowerCase() === 'help') {
         const files = listSchematicFiles();
         if (files.length === 0) {
@@ -1081,32 +1013,6 @@ async function handleChatLine(username, text) {
         await swarm.setWorkerCount(parsed.swarmCount);
       }
       return runSchematicBuild(username, parsed.name, parsed.coordInfo);
-    }
-    case 'build': {
-      if (args.length === 0) {
-        const files = listSchematicFiles();
-        const summary = files.map((f, i) => `${i + 1}: ${f.replace(/\.(litematic|nbt|schematic)$/i, '')}`).join(' | ');
-        safeChat(`[Build Options] Schematics: ${summary}. Or shapes: pyramid, dome, tower. Use: !build <number|name>`);
-        return;
-      }
-      const target = args[0].toLowerCase();
-      if (target === 'pyramid') {
-        const pyrSize = parseInt(args[1], 10) || 5;
-        return runBuild(username, pyramid(pyrSize), parseCoordsAndRotation(args.slice(2)), `Pyramid (${pyrSize}x${pyrSize})`);
-      } else if (target === 'dome') {
-        const domeR = parseInt(args[1], 10) || 6;
-        return runBuild(username, dome(domeR), parseCoordsAndRotation(args.slice(2)), `Dome (r=${domeR})`);
-      } else if (target === 'tower') {
-        const tR = parseInt(args[1], 10) || 2;
-        const tH = parseInt(args[2], 10) || 10;
-        return runBuild(username, tower(tR, tH), parseCoordsAndRotation(args.slice(3)), `Tower (r=${tR}, h=${tH})`);
-      } else {
-        const parsed = parseSchematicCommand(args);
-        if (parsed.swarmCount && parsed.swarmCount > 1) {
-          await swarm.setWorkerCount(parsed.swarmCount);
-        }
-        return runSchematicBuild(username, parsed.name, parsed.coordInfo);
-      }
     }
     case 'come':
       return comeToPlayer(username);
@@ -1129,30 +1035,11 @@ async function handleChatLine(username, text) {
       return;
     }
     case 'help':
-      safeChat('[Commands] !schematic <number|name>, !schematics (list options), !build <name>, !spawn 10, !pyramid <size>, !dome <r>, !tower <r> <h>, !status, !come, !undo, !stop');
+      safeChat('[Commands] !schematic <number|name> [x y z] [rot], !schematics, !build <name>, !swarm <count>, !status, !come, !undo, !stop');
       return;
     default:
       return;
   }
-}
-
-async function runBuild(requester, offsets, coordInfo = { origin: null, rotation: 0 }, shapeName = 'Structure') {
-  if (builder.isBuilding()) {
-    safeChat(`[Builder] Cancelling previous build to start "${shapeName}"...`);
-    builder.cancel();
-    if (swarm) swarm.cancelAll();
-    await new Promise((r) => setTimeout(r, 400));
-  }
-  safeChat(`/gamemode creative ${BOT_USERNAME}`);
-  builder.setJob(shapeName);
-  const origin = resolveOrigin(requester, coordInfo.origin);
-  if (bot.entity && bot.entity.position.distanceTo(origin) > 8) {
-    safeChat(`/tp ${BOT_USERNAME} ${origin.x} ${origin.y + 1} ${origin.z}`);
-    safeChat(`/tp @e[type=player,name=BuilderBot*] ${origin.x} ${origin.y + 1} ${origin.z}`);
-    await new Promise((r) => setTimeout(r, 1200));
-  }
-  safeChat(`[Builder] Building "${shapeName}" (${offsets.length} blocks, fleet: ${swarm.getWorkerCount()} bots) at ${origin.x} ${origin.y} ${origin.z}...`);
-  await executeBuild(offsets, origin);
 }
 
 async function runSchematicBuild(requester, name, coordInfo = { origin: null, rotation: 0 }) {
