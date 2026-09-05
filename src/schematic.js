@@ -167,6 +167,10 @@ function parseLitematicBlocks(simplifiedNbt, rotation = 0) {
     const sizeZ = Math.abs(size.z);
     const volume = sizeX * sizeY * sizeZ;
 
+    const minX = size.x < 0 ? position.x + size.x + 1 : position.x;
+    const minY = size.y < 0 ? position.y + size.y + 1 : position.y;
+    const minZ = size.z < 0 ? position.z + size.z + 1 : position.z;
+
     const bitsPerEntry = bitsNeededForPalette(palette.length);
     const longArray = region.BlockStates;
     if (!longArray) continue;
@@ -181,10 +185,10 @@ function parseLitematicBlocks(simplifiedNbt, rotation = 0) {
           const entry = palette[paletteIndex];
           if (!entry || entry.Name === 'minecraft:air') continue;
 
-          // Compute absolute relative coordinates inside the region
-          const rx = size.x < 0 ? position.x - x : position.x + x;
-          const ry = size.y < 0 ? position.y - y : position.y + y;
-          const rz = size.z < 0 ? position.z - z : position.z + z;
+          // Compute exact coordinate from minimum corner
+          const rx = minX + x;
+          const ry = minY + y;
+          const rz = minZ + z;
 
           rawBlocks.push({
             pos: new Vec3(rx, ry, rz),

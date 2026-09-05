@@ -632,9 +632,10 @@ async function loadSchematicBlocks(name, rotation = 0) {
   const { parsed } = await nbt.parse(decompressed);
   const simplified = nbt.simplify(parsed);
 
-  if (filePath.endsWith('.litematic')) {
+  const lower = filePath.toLowerCase();
+  if (lower.endsWith('.litematic')) {
     return parseLitematicBlocks(simplified, rotation);
-  } else if (filePath.endsWith('.schematic')) {
+  } else if (lower.endsWith('.schematic')) {
     return parseLegacySchematicBlocks(simplified, rotation);
   }
   return parseStructureNbtBlocks(simplified, rotation);
