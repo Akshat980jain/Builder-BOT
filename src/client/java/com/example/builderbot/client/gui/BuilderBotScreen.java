@@ -452,6 +452,9 @@ public class BuilderBotScreen extends Screen {
     private void loadSchematics() {
         this.allSchematicFiles = SchematicManager.listSchematics();
         filterSchematics(searchBox != null ? searchBox.getValue() : "");
+        if (selectedSchematicIndex < 0 && !filteredSchematicFiles.isEmpty()) {
+            selectedSchematicIndex = 0;
+        }
     }
 
     private void filterSchematics(String query) {
@@ -466,6 +469,9 @@ public class BuilderBotScreen extends Screen {
 
         if (selectedSchematicIndex >= filteredSchematicFiles.size()) {
             selectedSchematicIndex = filteredSchematicFiles.isEmpty() ? -1 : 0;
+        }
+        if (selectedSchematicIndex < 0 && !filteredSchematicFiles.isEmpty()) {
+            selectedSchematicIndex = 0;
         }
         clampScroll();
     }
@@ -578,21 +584,26 @@ public class BuilderBotScreen extends Screen {
 
     private void onBuildSelectedSchematic() {
         com.example.builderbot.client.render.ClientGhostRenderer.clearGhostSchematic();
-        if (selectedSchematicIndex >= 0 && selectedSchematicIndex < filteredSchematicFiles.size()) {
-            File selected = filteredSchematicFiles.get(selectedSchematicIndex);
-            BlockPos origin = getTargetOrigin();
-            if (origin == null) {
-                if (Minecraft.getInstance().player != null) {
-                    Minecraft.getInstance().player.sendSystemMessage(
-                        Component.literal("§c[BuilderBot] Please enter valid X, Y, Z coordinates before building!"));
-                }
-                return;
+        if (selectedSchematicIndex < 0 || selectedSchematicIndex >= filteredSchematicFiles.size()) {
+            if (Minecraft.getInstance().player != null) {
+                Minecraft.getInstance().player.sendSystemMessage(
+                    Component.literal("§c[BuilderBot] Please select a schematic from the list first!"));
             }
-            sendOpPrepCommands(origin);
-            String coordArgs = buildCoordArgsString();
-            runCommand("builderbot swarm " + selectedBotCount + " schematic " + selected.getName() + coordArgs);
-            this.onClose();
+            return;
         }
+        File selected = filteredSchematicFiles.get(selectedSchematicIndex);
+        BlockPos origin = getTargetOrigin();
+        if (origin == null) {
+            if (Minecraft.getInstance().player != null) {
+                Minecraft.getInstance().player.sendSystemMessage(
+                    Component.literal("§c[BuilderBot] Please enter valid X, Y, Z coordinates before building!"));
+            }
+            return;
+        }
+        sendOpPrepCommands(origin);
+        String coordArgs = buildCoordArgsString();
+        runCommand("builderbot swarm " + selectedBotCount + " schematic " + selected.getName() + coordArgs);
+        this.onClose();
     }
 
     private void onPreviewSchematic() {
@@ -602,20 +613,25 @@ public class BuilderBotScreen extends Screen {
             return;
         }
 
-        if (selectedSchematicIndex >= 0 && selectedSchematicIndex < filteredSchematicFiles.size()) {
-            File selected = filteredSchematicFiles.get(selectedSchematicIndex);
-            BlockPos origin = getTargetOrigin();
-            if (origin == null) {
-                if (Minecraft.getInstance().player != null) {
-                    Minecraft.getInstance().player.sendSystemMessage(
-                        Component.literal("§c[BuilderBot] Please enter valid X, Y, Z coordinates before previewing!"));
-                }
-                return;
+        if (selectedSchematicIndex < 0 || selectedSchematicIndex >= filteredSchematicFiles.size()) {
+            if (Minecraft.getInstance().player != null) {
+                Minecraft.getInstance().player.sendSystemMessage(
+                    Component.literal("§c[BuilderBot] Please select a schematic from the list first to preview!"));
             }
-            com.example.builderbot.client.render.ClientGhostRenderer.showGhostSchematic(
-                    selected.getName(), origin, selectedRotation);
-            this.onClose();
+            return;
         }
+        File selected = filteredSchematicFiles.get(selectedSchematicIndex);
+        BlockPos origin = getTargetOrigin();
+        if (origin == null) {
+            if (Minecraft.getInstance().player != null) {
+                Minecraft.getInstance().player.sendSystemMessage(
+                    Component.literal("§c[BuilderBot] Please enter valid X, Y, Z coordinates before previewing!"));
+            }
+            return;
+        }
+        com.example.builderbot.client.render.ClientGhostRenderer.showGhostSchematic(
+                selected.getName(), origin, selectedRotation);
+        this.onClose();
     }
 
     private void onManualBuild() {
@@ -652,6 +668,15 @@ public class BuilderBotScreen extends Screen {
                 conn.sendChat("!stop");
             } else if (command.equals("builderbot tp")) {
                 conn.sendChat("!come");
+            } else if (command.equals("builderbot fly")) {
+                conn.sendChat("!fly");
+            } else if (command.startsWith("builderbot cleararea")) {
+                String args = command.substring("builderbot cleararea".length()).trim();
+                conn.sendChat("!cleararea " + args);
+            } else if (command.equals("builderbot despawnall")) {
+                conn.sendChat("!despawnall");
+            } else if (command.equals("builderbot despawn")) {
+                conn.sendChat("!despawn");
             } else if (command.contains("schematic ")) {
                 String name = command.substring(command.indexOf("schematic ") + "schematic ".length()).trim();
                 if (command.contains("swarm ") && selectedBotCount > 1) {
@@ -666,8 +691,6 @@ public class BuilderBotScreen extends Screen {
                 } else {
                     conn.sendChat("!schematic " + name);
                 }
-            } else if (command.equals("builderbot fly")) {
-                conn.sendChat("!status");
             }
 
             // Also invoke internal command if running in singleplayer server
@@ -689,15 +712,20 @@ public class BuilderBotScreen extends Screen {
         guiGraphics.fill(winX, winY, winX + winW, winY + 24, 0xFA1E293B);
         guiGraphics.text(this.font, "🤖 BUILDER BOT CONTROL SUITE", winX + 12, winY + 8, 0xFFF59E0B);
 
-        // Status Card
-        BuildPlan plan = (bot instanceof BuilderBotEntity b) ? b.getCurrentPlan() : null;
-        boolean isBuilding = plan != null && !plan.isEmpty();
-        if (isBuilding) {
-            String statusText = String.format("🔨 Building: %d/%d blocks (%d%%)",
-                    plan.total() - plan.remaining(), plan.total(), plan.percentComplete());
-            guiGraphics.text(this.font, statusText, winX + winW - 170, winY + 8, 0xFF38BDF8);
+        // Status Card: Check live multiplayer build progress first, fallback to singleplayer plan
+        if (com.example.builderbot.client.BuilderBotClient.liveBuildStatus != null &&
+            (System.currentTimeMillis() - com.example.builderbot.client.BuilderBotClient.lastStatusUpdate < 60000)) {
+            guiGraphics.text(this.font, com.example.builderbot.client.BuilderBotClient.liveBuildStatus, winX + winW - 190, winY + 8, 0xFF38BDF8);
         } else {
-            guiGraphics.text(this.font, "🟢 Ready", winX + winW - 65, winY + 8, 0xFF4ADE80);
+            BuildPlan plan = (bot instanceof BuilderBotEntity b) ? b.getCurrentPlan() : null;
+            boolean isBuilding = plan != null && !plan.isEmpty();
+            if (isBuilding) {
+                String statusText = String.format("🔨 Building: %d/%d blocks (%d%%)",
+                        plan.total() - plan.remaining(), plan.total(), plan.percentComplete());
+                guiGraphics.text(this.font, statusText, winX + winW - 170, winY + 8, 0xFF38BDF8);
+            } else {
+                guiGraphics.text(this.font, "🟢 Ready", winX + winW - 65, winY + 8, 0xFF4ADE80);
+            }
         }
 
         // Tab 0 List Box Rendering

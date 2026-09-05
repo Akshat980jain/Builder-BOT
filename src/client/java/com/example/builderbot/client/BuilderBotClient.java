@@ -18,6 +18,9 @@ import net.minecraft.world.entity.Entity;
 @Environment(EnvType.CLIENT)
 public class BuilderBotClient implements ClientModInitializer {
 
+    public static String liveBuildStatus = null;
+    public static long lastStatusUpdate = 0;
+
     @Override
     public void onInitializeClient() {
         BuilderBotMod.LOGGER.info("[BuilderBot & MinerBot] Initialising client renderer, punch & right-click interaction screens…");
@@ -57,7 +60,37 @@ public class BuilderBotClient implements ClientModInitializer {
             }
         });
 
-        BuilderBotMod.LOGGER.info("[BuilderBot & MinerBot] Punch, Right-click & Auto-Creative enforcement ready.");
+        // 5. Live Swarm Status Listener: Track progress from chat for GUI status card
+        net.fabricmc.fabric.api.client.message.v1.ClientReceiveMessageEvents.GAME.register((message, overlay) -> {
+            if (message != null) {
+                String str = message.getString();
+                if (str.contains("[Progress]") || str.contains("[Builder] Building")) {
+                    if (str.contains(": ") && str.contains(" placed")) {
+                        try {
+                            int colon = str.indexOf(": ");
+                            int placedIdx = str.indexOf(" placed");
+                            String countStr = str.substring(colon + 2, placedIdx).trim();
+                            String percentStr = "";
+                            if (str.contains("- ") && str.contains("%)")) {
+                                percentStr = str.substring(str.indexOf("- ") + 2, str.indexOf("%)") + 1);
+                            }
+                            liveBuildStatus = "🔨 " + countStr + " (" + percentStr + ")";
+                            lastStatusUpdate = System.currentTimeMillis();
+                        } catch (Exception ignored) {
+                            liveBuildStatus = "🔨 Building...";
+                            lastStatusUpdate = System.currentTimeMillis();
+                        }
+                    } else {
+                        liveBuildStatus = "🔨 Building...";
+                        lastStatusUpdate = System.currentTimeMillis();
+                    }
+                } else if (str.contains("[Builder] Done") || str.contains("[Builder] Build stopped") || str.contains("[Stop] Build stopped")) {
+                    liveBuildStatus = null;
+                }
+            }
+        });
+
+        BuilderBotMod.LOGGER.info("[BuilderBot & MinerBot] Punch, Right-click & Live Status ready.");
     }
 
     private static boolean handleBotInteraction(Entity entity) {

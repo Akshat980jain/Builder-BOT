@@ -1131,8 +1131,42 @@ async function handleChatLine(username, text) {
       }
       return;
     }
+    case 'fly': {
+      if (bot.creative) {
+        try {
+          bot.creative.startFlying();
+          safeChat('[Flight] Creative flight enabled for main bot.');
+        } catch (e) {
+          safeChat(`[Flight Error] ${e.message}`);
+        }
+      } else {
+        safeChat('[Flight] Bot is not in Creative mode.');
+      }
+      return;
+    }
+    case 'despawn': {
+      safeChat('[Swarm] Reducing workforce to 1 bot...');
+      await swarm.setWorkerCount(1);
+      return;
+    }
+    case 'despawnall': {
+      safeChat('[Swarm] Stopping builds and disconnecting extra fleet bots...');
+      swarm.cancelAll();
+      builder.cancel();
+      await swarm.setWorkerCount(1);
+      return;
+    }
+    case 'cleararea':
+    case 'excavate': {
+      const rad = Math.min(Math.max(parseInt(args[0], 10) || 8, 1), 32);
+      const h = Math.min(Math.max(parseInt(args[1], 10) || 16, 1), 32);
+      const center = bot.entity ? bot.entity.position.floored() : new Vec3(0, 64, 0);
+      safeChat(`[Excavator] Clearing ${rad * 2}x${h}x${rad * 2} area around (${center.x}, ${center.y}, ${center.z})...`);
+      safeChat(`/fill ${center.x - rad} ${center.y} ${center.z - rad} ${center.x + rad} ${center.y + h} ${center.z + rad} air replace`);
+      return;
+    }
     case 'help':
-      safeChat('[Commands] !schematic <number|name> [x y z] [rot], !schematics, !build <name>, !swarm <count>, !status, !come, !undo, !stop');
+      safeChat('[Commands] !schematic <name> [coords] [rot], !schematics, !swarm <count>, !cleararea <rad> <h>, !fly, !status, !come, !undo, !stop, !despawnall');
       return;
     default:
       return;
