@@ -793,7 +793,7 @@ function createBot() {
       }
     }, 20000);
 
-    safeChat(`[BuilderBot] Online! Commands: !schematic <name> [x y z] [rot], !schematics, !build <name>, !swarm <count>, !status, !come, !stop`);
+    safeChat(`[BuilderBot] Online and ready! Open the control menu or type !schematic <name> to build.`);
   });
 
   let lastCmdTime = 0;
@@ -819,11 +819,15 @@ function createBot() {
   bot.on('messagestr', (message) => {
     if (!message) return;
     const clean = message.trim();
-    const cmdMatch = clean.match(/(?:<([^>]+)>|([A-Za-z0-9_]{3,16})\s*[:»>])?\s*(![a-zA-Z0-9_-]+.*)/);
+    // Strictly ignore any messages from BuilderBot, swarm bots, or announcements
+    if (clean.includes('BuilderBot') || clean.includes(BOT_USERNAME) || clean.includes('[Builder]') || clean.includes('[Swarm]')) return;
+
+    // Only match messages where a real player is speaking: <PlayerName> !command or PlayerName: !command
+    const cmdMatch = clean.match(/^(?:<([A-Za-z0-9_]{3,16})>|([A-Za-z0-9_]{3,16})\s*[:»>])\s*(![a-zA-Z0-9_-]+.*)$/);
     if (cmdMatch) {
-      const sender = cmdMatch[1] || cmdMatch[2] || 'Player';
+      const sender = cmdMatch[1] || cmdMatch[2];
+      if (!sender || sender.toLowerCase().startsWith('builderbot')) return;
       const cmdText = cmdMatch[3].trim();
-      if (sender.startsWith('BuilderBot')) return;
       const now = Date.now();
       if (cmdText === lastCmdText && now - lastCmdTime < 1000) return;
       lastCmdTime = now;
