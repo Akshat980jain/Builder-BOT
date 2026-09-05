@@ -79,7 +79,7 @@ public class ClientGhostRenderer {
 
         if (mc.player != null) {
             mc.player.sendSystemMessage(
-                    Component.literal("🔮 3D Block-by-Block Ghost Hologram ACTIVE for '" + filename + "' (" + tasks.size() + " blocks) — Walk through to inspect!").withStyle(ChatFormatting.AQUA));
+                    Component.literal("🔮 3D Ghost Hologram ACTIVE for '" + filename + "' at (" + origin.getX() + ", " + origin.getY() + ", " + origin.getZ() + ") Rot: " + rotation + "° (" + tasks.size() + " blocks) — Walk through to inspect!").withStyle(ChatFormatting.AQUA));
         }
 
         return true;
