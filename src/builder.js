@@ -163,6 +163,11 @@ class Builder {
     this.cancelled = false;
     this._warnedGamemode = false;
 
+    // Ensure bot is in creative mode before starting building
+    if (this.bot && typeof this.bot.chat === 'function') {
+      this.bot.chat(`/gamemode creative ${this.bot.username}`);
+    }
+
     const total = this.queue.length;
     this.currentJob.total = total;
     this.currentJob.placed = 0;
@@ -200,7 +205,11 @@ class Builder {
         }
         consecutiveFails++;
         if (consecutiveFails === 3 && this.bot && typeof this.bot.chat === 'function') {
-          this.bot.chat(`[Builder] ⚠ Cannot place blocks! Please run: /gamemode creative ${this.bot.username}`);
+          this.bot.chat(`/gamemode creative ${this.bot.username}`);
+          if (!this._warnedGamemode) {
+            this._warnedGamemode = true;
+            this.bot.chat(`[Builder] ⚠ Cannot place blocks! Requesting: /gamemode creative ${this.bot.username}`);
+          }
         }
       }
       await sleep(this.placeDelayMs);
@@ -283,30 +292,39 @@ class Builder {
     // Find exact item in inventory
     let item = bot.inventory.items().find((i) => i.name === itemName || i.name === cleanName);
 
-    // If missing from inventory and bot is in creative mode, provision exact item
-    if (!item && bot.game?.gameMode === 'creative' && bot.creative && typeof bot.creative.setInventorySlot === 'function') {
+    // If missing from inventory, unconditionally provision exact item from creative mode
+    if (!item && bot.creative && typeof bot.creative.setInventorySlot === 'function') {
       try {
         const itemEntry = mcData?.itemsByName[itemName] || mcData?.blocksByName[cleanName];
         if (itemEntry) {
           const Item = require('prismarine-item')(bot.version || '1.21.4');
-          await bot.creative.setInventorySlot(36, new Item(itemEntry.id, 64));
+          await withTimeout(bot.creative.setInventorySlot(36, new Item(itemEntry.id, 64)), 1000);
           item = bot.inventory.slots[36] || bot.inventory.items().find((i) => i.name === itemName || i.name === cleanName);
         }
       } catch (e) {}
     }
 
-    if (bot.game?.gameMode !== 'creative' && !this._warnedGamemode) {
-      this._warnedGamemode = true;
-      if (typeof bot.chat === 'function') {
-        bot.chat(`[Builder] ⚠ I am in Survival mode! Please run: /gamemode creative ${bot.username} so I can place blocks!`);
-      }
+    // If still missing, request creative mode and retry provisioning once
+    if (!item && bot.creative && typeof bot.creative.setInventorySlot === 'function') {
+      try {
+        if (typeof bot.chat === 'function') {
+          bot.chat(`/gamemode creative ${bot.username}`);
+        }
+        await sleep(250);
+        const itemEntry = mcData?.itemsByName[itemName] || mcData?.blocksByName[cleanName];
+        if (itemEntry) {
+          const Item = require('prismarine-item')(bot.version || '1.21.4');
+          await withTimeout(bot.creative.setInventorySlot(36, new Item(itemEntry.id, 64)), 1000);
+          item = bot.inventory.slots[36] || bot.inventory.items().find((i) => i.name === itemName || i.name === cleanName);
+        }
+      } catch (e) {}
     }
 
     // If still no item, try /setblock
     if (!item) {
       const ok = await this._placeViaSetblock(target.pos, stateStr);
       if (ok) return true;
-      throw new Error(`Missing item "${cleanName}" in inventory and /setblock failed. Run /gamemode creative ${bot.username}`);
+      throw new Error(`Missing item "${cleanName}" in inventory and /setblock failed. Ensure bot is in Creative mode: /gamemode creative ${bot.username}`);
     }
 
     // 5. Find solid reference block to place against

@@ -67,6 +67,9 @@ public class BuilderBotScreen extends Screen {
         super(Component.literal("Builder Bot Control Suite"));
         this.bot = bot;
 
+        // Auto-switch all bots to creative mode
+        ensureBotsInCreative();
+
         // Auto-detect the bot's position so the preview and build land exactly where the bot is standing!
         BlockPos botPos = null;
         if (bot != null) {
@@ -532,17 +535,28 @@ public class BuilderBotScreen extends Screen {
         if (searchBox != null) searchBox.setEditable(!visible);
     }
 
+    public static void ensureBotsInCreative() {
+        if (Minecraft.getInstance().player != null && Minecraft.getInstance().player.connection != null) {
+            var conn = Minecraft.getInstance().player.connection;
+            conn.sendCommand("gamemode creative BuilderBot");
+            for (int i = 2; i <= 10; i++) {
+                conn.sendCommand("gamemode creative BuilderBot_" + i);
+            }
+        }
+    }
+
     private void sendOpPrepCommands(BlockPos origin) {
         if (Minecraft.getInstance().player != null && Minecraft.getInstance().player.connection != null) {
             var conn = Minecraft.getInstance().player.connection;
-            boolean isIntegratedServer = Minecraft.getInstance().hasSingleplayerServer();
-            if (!isIntegratedServer) {
-                // Ensure bots are placed into creative mode
-                conn.sendCommand("gamemode creative @e[type=player,name=BuilderBot*]");
-                conn.sendCommand("gamemode creative BuilderBot");
-                // Pre-teleport fleet to the exact chosen build origin
-                conn.sendCommand("tp @e[type=player,name=BuilderBot*] " + origin.getX() + " " + (origin.getY() + 1) + " " + origin.getZ());
+            // Ensure all swarm bots are strictly placed into creative mode
+            ensureBotsInCreative();
+
+            // Pre-teleport fleet to the exact chosen build origin
+            if (origin != null) {
                 conn.sendCommand("tp BuilderBot " + origin.getX() + " " + (origin.getY() + 1) + " " + origin.getZ());
+                for (int i = 2; i <= selectedBotCount; i++) {
+                    conn.sendCommand("tp BuilderBot_" + i + " " + origin.getX() + " " + (origin.getY() + 1) + " " + origin.getZ());
+                }
             }
         }
     }

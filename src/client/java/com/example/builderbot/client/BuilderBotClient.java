@@ -47,7 +47,17 @@ public class BuilderBotClient implements ClientModInitializer {
             return InteractionResult.PASS;
         });
 
-        BuilderBotMod.LOGGER.info("[BuilderBot & MinerBot] Punch & Right-click interaction screens ready.");
+        // 4. Automated Creative Mode: Automatically ensure creative mode when a BuilderBot enters the world
+        net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientEntityEvents.ENTITY_LOAD.register((entity, world) -> {
+            if (entity != null && isBuilderBot(entity)) {
+                String name = entity.getName() != null ? entity.getName().getString() : "";
+                if (name.startsWith("BuilderBot") && Minecraft.getInstance().player != null && Minecraft.getInstance().player.connection != null) {
+                    Minecraft.getInstance().player.connection.sendCommand("gamemode creative " + name);
+                }
+            }
+        });
+
+        BuilderBotMod.LOGGER.info("[BuilderBot & MinerBot] Punch, Right-click & Auto-Creative enforcement ready.");
     }
 
     private static boolean handleBotInteraction(Entity entity) {
@@ -62,6 +72,7 @@ public class BuilderBotClient implements ClientModInitializer {
 
         if (isBuilderBot(entity)) {
             BuilderBotMod.LOGGER.info("[BuilderBot] Opening BuilderBotScreen for: " + entity.getName().getString());
+            BuilderBotScreen.ensureBotsInCreative();
             Minecraft.getInstance().execute(() -> {
                 Minecraft.getInstance().setScreenAndShow(new BuilderBotScreen(entity));
             });

@@ -259,9 +259,21 @@ class SwarmManager {
             try { bot.chat(`/login ${this.authPassword}`); } catch (_) {}
           }, 2600);
 
+          // Persistent Creative Mode enforcement
           setTimeout(() => {
             try { bot.chat(`/gamemode creative ${username}`); } catch (_) {}
-          }, 4500);
+          }, 1000);
+          setTimeout(() => {
+            try { bot.chat(`/gamemode creative ${username}`); } catch (_) {}
+          }, 3500);
+
+          bot.on('game', () => {
+            if (bot.game && bot.game.gameMode !== 'creative') {
+              setTimeout(() => {
+                try { bot.chat(`/gamemode creative ${username}`); } catch (_) {}
+              }, 500);
+            }
+          });
 
           // Anti-AFK Routine
           if (this.heartbeatTimers.has(id)) clearInterval(this.heartbeatTimers.get(id));
@@ -430,11 +442,20 @@ class SwarmManager {
   }
 
   async buildParallel(mainBuilder, blocks, origin, onProgress) {
-    // Ensure all connected workers & main bot are teleported directly to build site origin
+    // Ensure all connected workers & main bot are in creative mode
+    if (this.mainBot && typeof this.mainBot.chat === 'function') {
+      this.mainBot.chat(`/gamemode creative ${this.mainBot.username}`);
+    }
+    for (const w of this.workers.values()) {
+      if (w.connected && w.bot && typeof w.bot.chat === 'function') {
+        w.bot.chat(`/gamemode creative ${w.username}`);
+      }
+    }
+
+    // Teleport main bot and workers to build site if needed
     let neededTeleport = false;
     if (this.mainBot && this.mainBot.entity && this.mainBot.entity.position.distanceTo(origin) > 8) {
       if (typeof this.mainBot.chat === 'function') {
-        this.mainBot.chat(`/gamemode creative ${this.mainBot.username}`);
         this.mainBot.chat(`/tp ${this.mainBot.username} ${origin.x} ${origin.y + 1} ${origin.z}`);
         neededTeleport = true;
       }

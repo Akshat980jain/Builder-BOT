@@ -740,12 +740,21 @@ function createBot() {
       }, 2600);
     }
 
-    // Creative mode
-    if (config.server?.tryCreative !== false) {
-      setTimeout(() => {
-        safeChat(`/gamemode creative ${BOT_USERNAME}`);
-      }, 4000);
-    }
+    // Creative mode: ensure primary bot is persistently in creative mode
+    setTimeout(() => {
+      safeChat(`/gamemode creative ${BOT_USERNAME}`);
+    }, 1000);
+    setTimeout(() => {
+      safeChat(`/gamemode creative ${BOT_USERNAME}`);
+    }, 3500);
+
+    bot.on('game', () => {
+      if (bot.game && bot.game.gameMode !== 'creative') {
+        setTimeout(() => {
+          safeChat(`/gamemode creative ${BOT_USERNAME}`);
+        }, 500);
+      }
+    });
 
     // 24/7 Anti-AFK routine for primary bot
     if (afkInterval) clearInterval(afkInterval);
