@@ -60,7 +60,7 @@ const RECONNECT_DELAY_MS = config.utils?.['auto-reconnect-delay'] || 15000;
 const DUPLICATE_LOGIN_RECONNECT_DELAY_MS = 20000;
 const THROTTLE_RECONNECT_DELAY_MS = 90000;   // 90s when server throttles us
 const MAX_RECONNECT_DELAY_MS = config.utils?.['max-reconnect-delay'] || 120000;
-const HTTP_PORT = process.env.PORT || config.web?.port || 8080;
+const HTTP_PORT = Number(process.env.PORT) || config.web?.port || 8080;
 let reconnectAttempts = 0; // tracks consecutive failures for backoff
 
 // ---------------------------------------------------------------------------
@@ -68,6 +68,10 @@ let reconnectAttempts = 0; // tracks consecutive failures for backoff
 // ---------------------------------------------------------------------------
 const app = express();
 app.use(express.json());
+
+// Immediate Health Check & Ping routes for Render port detection
+app.get(['/healthz', '/health', '/ping'], (req, res) => res.status(200).send('OK'));
+app.head('*', (req, res) => res.status(200).end());
 
 let botStatus = 'starting';
 const logs = [];
@@ -79,6 +83,14 @@ function logSystem(msg) {
   if (logs.length > 200) logs.shift();
   console.log(entry);
 }
+
+// Start HTTP server immediately on 0.0.0.0 so Render detects open port in <2s!
+const server = app.listen(HTTP_PORT, '0.0.0.0', () => {
+  logSystem(`[HTTP] Builder Bot Dashboard & Swarm Server listening on 0.0.0.0:${HTTP_PORT}`);
+  console.log(`==> Server listening on 0.0.0.0:${HTTP_PORT}`);
+});
+server.keepAliveTimeout = 120000;
+server.headersTimeout = 125000;
 
 const SCHEMATICS_DIR = process.env.SCHEMATICS_DIR || path.join(__dirname, 'schematics');
 fs.mkdirSync(SCHEMATICS_DIR, { recursive: true });
@@ -606,9 +618,7 @@ app.get('/', (req, res) => {
   `);
 });
 
-app.listen(HTTP_PORT, () => {
-  logSystem(`[HTTP] Builder Bot Dashboard & Swarm Server listening on :${HTTP_PORT}`);
-});
+
 
 // ---------------------------------------------------------------------------
 // Schematic Loader & Directory Discovery
