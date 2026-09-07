@@ -1,0 +1,17 @@
+{
+  "java.jdt.ls.java.home": "C:/Users/hp/jdk-25",
+  "java.import.gradle.java.home": "C:/Users/hp/jdk-25",
+  "java.configuration.runtimes": [
+    {
+      "name": "JavaSE-25",
+      "path": "C:/Users/hp/jdk-25",
+      "default": true
+    },
+    {
+      "name": "JavaSE-24",
+      "path": "C:/Program Files/Java/jdk-24"
+    }
+  ],
+  "java.import.gradle.enabled": true,
+  "java.import.gradle.wrapper.enabled": true
+}

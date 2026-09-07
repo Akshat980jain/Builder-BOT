@@ -1,0 +1,13 @@
+{
+  "entity.builderbot.builder_bot": "Builder Bot",
+  "item.builderbot.builder_bot_spawn_egg": "Builder Bot Spawn Egg",
+
+  "builderbot.command.spawn.success": "Builder Bot spawned.",
+  "builderbot.command.build.success": "Bot assigned structure: %s (%d blocks).",
+  "builderbot.command.build.not_found": "Structure not found: %s",
+  "builderbot.command.status.idle": "Bot is idle.",
+  "builderbot.command.status.building": "Bot building: %d/%d blocks (%d%% done).",
+  "builderbot.command.stop.success": "Build plan cancelled.",
+  "builderbot.command.no_bot": "No Builder Bot found within range.",
+  "builderbot.command.testbuild.success": "Test build assigned: %d blocks."
+}

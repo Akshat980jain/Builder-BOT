@@ -40,7 +40,7 @@ const { SwarmManager } = require('./src/swarm');
 const { installChatCompat } = require('./src/chatCompat');
 const { installFabricSpoof } = require('./src/fabricSpoof');
 const { installPacketDebugger } = require('./src/debugPackets');
-const { parseLitematicBlocks, parseStructureNbtBlocks, parseLegacySchematicBlocks } = require('./src/schematic');
+const { parseLitematicBlocks, parseStructureNbtBlocks, parseLegacySchematicBlocks, parseSpongeSchematicBlocks } = require('./src/schematic');
 
 // ---------------------------------------------------------------------------
 // Configuration Resolution
@@ -94,6 +94,9 @@ server.headersTimeout = 125000;
 const SCHEMATICS_DIR = process.env.SCHEMATICS_DIR || path.join(__dirname, 'schematics');
 fs.mkdirSync(SCHEMATICS_DIR, { recursive: true });
 
+// In-memory cache for parsed schematics: key -> `${filename}:${rotation}` -> Array of block objects
+const schematicCache = new Map();
+
 const upload = multer({
   storage: multer.diskStorage({
     destination: SCHEMATICS_DIR,
@@ -102,13 +105,22 @@ const upload = multer({
   limits: { fileSize: 50 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const ok = /\.(litematic|nbt|schem|schematic)$/i.test(file.originalname);
-    cb(ok ? null : new Error('Only .litematic and .nbt files are accepted'), ok);
+    cb(ok ? null : new Error('Only .litematic, .nbt, .schematic, and .schem files are accepted'), ok);
   },
 });
 
 app.post('/schematics/upload', upload.single('schematic'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file received (field name must be "schematic")' });
   logSystem(`[Schematics] Received upload: ${req.file.originalname} (${req.file.size} bytes)`);
+
+  // Invalidate any cached entries for this uploaded file
+  for (const key of schematicCache.keys()) {
+    if (key.startsWith(`${req.file.originalname}:`)) {
+      schematicCache.delete(key);
+      logSystem(`[Schematics] Invalidated cache entry for: ${key}`);
+    }
+  }
+
   res.json({ ok: true, name: req.file.originalname });
 });
 
@@ -150,7 +162,7 @@ app.get('/api/schematics', (req, res) => {
     schematics: files.map((f, i) => ({
       index: i + 1,
       filename: f,
-      name: f.replace(/\.(litematic|nbt|schematic)$/i, '')
+      name: f.replace(/\.(litematic|nbt|schematic|schem)$/i, '')
     }))
   });
 });
@@ -603,7 +615,7 @@ app.get('/', (req, res) => {
 function listSchematicFiles() {
   if (!fs.existsSync(SCHEMATICS_DIR)) return [];
   return fs.readdirSync(SCHEMATICS_DIR)
-    .filter((f) => f.endsWith('.litematic') || f.endsWith('.nbt') || f.endsWith('.schematic'))
+    .filter((f) => f.endsWith('.litematic') || f.endsWith('.nbt') || f.endsWith('.schematic') || f.endsWith('.schem'))
     .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
 }
 
@@ -630,7 +642,7 @@ async function loadSchematicBlocks(name, rotation = 0) {
   // 3. Exact match without extension
   if (!match) {
     match = files.find((f) => {
-      const baseName = f.replace(/\.(litematic|nbt|schematic)$/i, '');
+      const baseName = f.replace(/\.(litematic|nbt|schematic|schem)$/i, '');
       return baseName.toLowerCase() === trimmed.toLowerCase();
     });
   }
@@ -643,26 +655,51 @@ async function loadSchematicBlocks(name, rotation = 0) {
     const cleanQuery = trimmed.replace(/[\s._-]+/g, '').toLowerCase();
     match = files.find((f) => {
       const cleanF = f.replace(/[\s._-]+/g, '').toLowerCase();
-      const cleanBase = f.replace(/\.(litematic|nbt|schematic)$/i, '').replace(/[\s._-]+/g, '').toLowerCase();
+      const cleanBase = f.replace(/\.(litematic|nbt|schematic|schem)$/i, '').replace(/[\s._-]+/g, '').toLowerCase();
       return cleanF.includes(cleanQuery) || cleanBase.includes(cleanQuery);
     });
   }
 
   if (!match) return null;
+
+  // Check cache first
+  const cacheKey = `${match}:${rotation}`;
+  if (schematicCache.has(cacheKey)) {
+    logSystem(`[Schematic] Cache hit for "${match}" (rot: ${rotation}°) — skipping disk read & parse.`);
+    return schematicCache.get(cacheKey);
+  }
+
   const filePath = path.join(SCHEMATICS_DIR, match);
 
-  const raw = fs.readFileSync(filePath);
-  const decompressed = raw[0] === 0x1f && raw[1] === 0x8b ? zlib.gunzipSync(raw) : raw;
+  // Non-blocking async file read
+  const raw = await fs.promises.readFile(filePath);
+
+  // Non-blocking async decompression
+  const decompressed = raw[0] === 0x1f && raw[1] === 0x8b
+    ? await new Promise((resolve, reject) => zlib.gunzip(raw, (err, buf) => err ? reject(err) : resolve(buf)))
+    : raw;
+
   const { parsed } = await nbt.parse(decompressed);
   const simplified = nbt.simplify(parsed);
 
   const lower = filePath.toLowerCase();
+  let blocks;
   if (lower.endsWith('.litematic')) {
-    return parseLitematicBlocks(simplified, rotation);
+    blocks = parseLitematicBlocks(simplified, rotation);
   } else if (lower.endsWith('.schematic')) {
-    return parseLegacySchematicBlocks(simplified, rotation);
+    blocks = parseLegacySchematicBlocks(simplified, rotation);
+  } else if (lower.endsWith('.schem')) {
+    blocks = parseSpongeSchematicBlocks(simplified, rotation);
+  } else {
+    blocks = parseStructureNbtBlocks(simplified, rotation);
   }
-  return parseStructureNbtBlocks(simplified, rotation);
+
+  // Store in cache
+  if (blocks && Array.isArray(blocks)) {
+    schematicCache.set(cacheKey, blocks);
+  }
+
+  return blocks;
 }
 
 // ---------------------------------------------------------------------------
@@ -727,7 +764,8 @@ function createBot() {
 
   builder = new Builder(bot, {
     blockName: config.builder?.defaultBlock || 'cobblestone',
-    placeDelayMs: config.swarm?.placeDelayMs || 120,
+    placeDelayMs: config.swarm?.placeDelayMs || 35,
+    creativeDelayMs: 30,
   });
 
   if (!swarm) {
@@ -735,7 +773,8 @@ function createBot() {
       host: TARGET_HOST,
       port: TARGET_PORT,
       version: TARGET_VERSION || '1.21.4',
-      placeDelayMs: config.swarm?.placeDelayMs || 120,
+      placeDelayMs: config.swarm?.placeDelayMs || 35,
+      creativeDelayMs: 30,
     }, config);
   } else {
     swarm.mainBot = bot;
@@ -973,9 +1012,14 @@ function parseCoordsAndRotation(args) {
 
 function resolveOrigin(requester, explicitOrigin) {
   if (explicitOrigin) return explicitOrigin;
-  // Always default to the bot's current exact position
-  if (bot.entity) {
-    return bot.entity.position.floored();
+  const botPos = bot.entity ? bot.entity.position.floored() : null;
+  const posStr = botPos ? `(${botPos.x}, ${botPos.y}, ${botPos.z})` : 'unknown';
+  safeChat(
+    `[Builder] ⚠ No origin coordinates detected from command. Defaulting to bot position ${posStr}. ` +
+      `Tip: specify "[X Y Z] [rotation]" in chat or GUI to anchor build at exact coordinates.`
+  );
+  if (botPos) {
+    return botPos;
   }
   let player = bot.players[requester]?.entity;
   if (!player) {
@@ -1006,15 +1050,16 @@ function parseSchematicCommand(args) {
     nameTokens.pop();
   }
 
-  // Strip commas and extra quotes from tokens
-  nameTokens = nameTokens.map((t) => t.replace(/[,"]+/g, '').trim()).filter(Boolean);
+  // Strip commas, parentheses, degree symbols, and extra quotes from tokens
+  nameTokens = nameTokens.map((t) => t.replace(/[,()"]+|°|deg/gi, '').trim()).filter(Boolean);
 
-  const parseNum = (val) => {
+  const parseNum = (val, axis = 'x') => {
     if (typeof val !== 'string') return null;
     if (val.startsWith('~')) {
       const offset = val.length > 1 ? parseFloat(val.slice(1)) : 0;
       const ref = bot?.entity ? bot.entity.position : new Vec3(0, 64, 0);
-      return Math.floor(ref.x + (isNaN(offset) ? 0 : offset));
+      const base = ref[axis] !== undefined ? ref[axis] : ref.x;
+      return Math.floor(base + (isNaN(offset) ? 0 : offset));
     }
     const num = parseFloat(val);
     return isNaN(num) ? null : Math.floor(num);
@@ -1031,9 +1076,9 @@ function parseSchematicCommand(args) {
     VALID_ROTATIONS.has(nameTokens[nameTokens.length - 1])
   ) {
     rotation = parseInt(nameTokens.pop(), 10);
-    const z = parseNum(nameTokens.pop());
-    const y = parseNum(nameTokens.pop());
-    const x = parseNum(nameTokens.pop());
+    const z = parseNum(nameTokens.pop(), 'z');
+    const y = parseNum(nameTokens.pop(), 'y');
+    const x = parseNum(nameTokens.pop(), 'x');
     if (x !== null && y !== null && z !== null) {
       origin = new Vec3(x, y, z);
     }
@@ -1044,9 +1089,9 @@ function parseSchematicCommand(args) {
     isNumeric(nameTokens[nameTokens.length - 2]) &&
     isNumeric(nameTokens[nameTokens.length - 1])
   ) {
-    const z = parseNum(nameTokens.pop());
-    const y = parseNum(nameTokens.pop());
-    const x = parseNum(nameTokens.pop());
+    const z = parseNum(nameTokens.pop(), 'z');
+    const y = parseNum(nameTokens.pop(), 'y');
+    const x = parseNum(nameTokens.pop(), 'x');
     if (x !== null && y !== null && z !== null) {
       origin = new Vec3(x, y, z);
     }
@@ -1100,7 +1145,7 @@ async function handleChatLine(username, text) {
           safeChat('[Schematics] No schematics found on server. Upload via web dashboard (:10000).');
           return;
         }
-        const summary = files.map((f, i) => `${i + 1}: ${f.replace(/\.(litematic|nbt|schematic)$/i, '')}`).join(' | ');
+        const summary = files.map((f, i) => `${i + 1}: ${f.replace(/\.(litematic|nbt|schematic|schem)$/i, '')}`).join(' | ');
         safeChat(`[Schematic Options] ${summary}`);
         safeChat(`[BuilderBot] Choose an option: !schematic <number|name> (e.g. !schematic 4 or !schematic deepslate)`);
         return;
@@ -1161,8 +1206,9 @@ async function handleChatLine(username, text) {
       const rad = Math.min(Math.max(parseInt(args[0], 10) || 8, 1), 32);
       const h = Math.min(Math.max(parseInt(args[1], 10) || 16, 1), 32);
       const center = bot.entity ? bot.entity.position.floored() : new Vec3(0, 64, 0);
-      safeChat(`[Excavator] Clearing ${rad * 2}x${h}x${rad * 2} area around (${center.x}, ${center.y}, ${center.z})...`);
-      safeChat(`/fill ${center.x - rad} ${center.y} ${center.z - rad} ${center.x + rad} ${center.y + h} ${center.z + rad} air replace`);
+      const totalBlocks = (rad * 2 + 1) * h * (rad * 2 + 1);
+      safeChat(`[Excavator] Digging ${rad * 2 + 1}x${h}x${rad * 2 + 1} area (${totalBlocks} max blocks) — no OP needed.`);
+      runClearArea(center, rad, h);
       return;
     }
     case 'help':
@@ -1189,7 +1235,7 @@ async function runSchematicBuild(requester, name, coordInfo = { origin: null, ro
 
   if (!blocks) {
     const files = listSchematicFiles();
-    const summary = files.map((f, i) => `${i + 1}: ${f.replace(/\.(litematic|nbt|schematic)$/i, '')}`).join(', ');
+    const summary = files.map((f, i) => `${i + 1}: ${f.replace(/\.(litematic|nbt|schematic|schem)$/i, '')}`).join(', ');
     safeChat(`[Builder] Schematic "${name}" not found. Available options: ${summary}.`);
     return;
   }
@@ -1266,12 +1312,66 @@ async function comeToPlayer(requester) {
     player = Object.values(bot.entities).find((e) => e.type === 'player' && e.username && e.username.toLowerCase() === requester.toLowerCase());
   }
   if (!player) {
-    safeChat(`Can't see you, ${requester}.`);
+    safeChat(`[Movement] Can't locate you, ${requester}. Make sure you are in the same world.`);
     return;
   }
   const pos = player.position;
-  bot.pathfinder.setGoal(new goals.GoalNear(pos.x, pos.y, pos.z, 2));
   safeChat(`[Movement] Coming to you, ${requester}!`);
+
+  // Use creative flyTo for instant, direct travel — fall back to ground pathfinder
+  if (bot.game?.gameMode === 'creative' && bot.creative && typeof bot.creative.flyTo === 'function') {
+    try {
+      await bot.creative.flyTo(new Vec3(pos.x, pos.y + 1, pos.z));
+    } catch (_) {
+      // flyTo failed — pathfind as fallback
+      try { bot.pathfinder.setGoal(new goals.GoalNear(pos.x, pos.y, pos.z, 2)); } catch (_) {}
+    }
+  } else {
+    try { bot.pathfinder.setGoal(new goals.GoalNear(pos.x, pos.y, pos.z, 2)); } catch (_) {}
+  }
+}
+
+async function runClearArea(center, rad, h) {
+  if (!bot.entity) return;
+  let removed = 0;
+  let skipped = 0;
+
+  // Fly above the area so the bot can reach all blocks
+  if (bot.game?.gameMode === 'creative' && bot.creative && typeof bot.creative.flyTo === 'function') {
+    try { await bot.creative.flyTo(new Vec3(center.x, center.y + h + 3, center.z)); } catch (_) {}
+  }
+
+  for (let dy = h - 1; dy >= 0; dy--) {          // top-down so blocks don't fall and block progress
+    for (let dx = -rad; dx <= rad; dx++) {
+      for (let dz = -rad; dz <= rad; dz++) {
+        if (builder && builder.isBuilding()) {
+          safeChat('[Excavator] Interrupted — build started.');
+          return;
+        }
+        const pos = new Vec3(center.x + dx, center.y + dy, center.z + dz);
+        const block = bot.blockAt(pos);
+        if (!block || block.name === 'air' || block.name === 'cave_air' || block.name === 'void_air') {
+          skipped++;
+          continue;
+        }
+        // Move bot within dig reach (creative flyTo)
+        if (bot.game?.gameMode === 'creative' && bot.creative && typeof bot.creative.flyTo === 'function') {
+          try { await bot.creative.flyTo(new Vec3(pos.x + 0.5, pos.y + 2, pos.z + 0.5)); } catch (_) {}
+        }
+        try {
+          if (bot.canDigBlock(block)) {
+            await bot.dig(block);
+            removed++;
+          }
+        } catch (_) {}
+        await new Promise((r) => setTimeout(r, 30)); // small yield so server isn't overwhelmed
+      }
+    }
+    if (removed % 50 === 0 && removed > 0) {
+      safeChat(`[Excavator] Progress: ${removed} blocks removed...`);
+    }
+  }
+  safeChat(`[Excavator] Done! Removed ${removed} blocks (${skipped} were already air).`);
 }
 
 process.on('unhandledRejection', (err) => {

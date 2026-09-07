@@ -2,9 +2,17 @@
 
 const mineflayer = require('mineflayer');
 const { pathfinder, Movements } = require('mineflayer-pathfinder');
+const { Vec3 } = require('vec3');
 const { Builder } = require('./builder');
 const { installChatCompat } = require('./chatCompat');
 const { installFabricSpoof } = require('./fabricSpoof');
+
+function withTimeout(promise, ms) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), ms)),
+  ]);
+}
 
 let defaultConfig = {};
 try {
@@ -36,7 +44,8 @@ class SwarmManager {
 
     this.maxWorkers = 10;
     this.targetWorkers = this.config.swarm?.targetCount || 3;
-    this.placeDelayMs = options.placeDelayMs || this.config.swarm?.placeDelayMs || 120;
+    this.placeDelayMs = options.placeDelayMs || this.config.swarm?.placeDelayMs || 35;
+    this.creativeDelayMs = options.creativeDelayMs || 30;
     this.staggerDelay = this.config.swarm?.staggerJoinDelay || 12000;
     this.authPassword = this.config.swarm?.autoAuthPassword || this.config.utils?.['auto-auth']?.password || 'chalol78';
 
@@ -215,7 +224,7 @@ class SwarmManager {
         installChatCompat(bot);
         installFabricSpoof(bot);
 
-        const builder = new Builder(bot, { placeDelayMs: this.placeDelayMs });
+        const builder = new Builder(bot, { placeDelayMs: this.placeDelayMs, creativeDelayMs: this.creativeDelayMs });
         entry.builder = builder;
 
         // Smart Dual-Auth Chat Listener
@@ -408,13 +417,17 @@ class SwarmManager {
     if (this.isProcessingQueue || this.reconnectQueue.length === 0) return;
     this.isProcessingQueue = true;
 
+    let isFirst = true;
     while (this.reconnectQueue.length > 0) {
       const nextId = this.reconnectQueue.shift();
       const entry = this.workers.get(nextId);
 
       if (entry && entry.connected && entry.bot && entry.bot.entity) continue;
 
-      await this.sleep(this.staggerDelay);
+      if (!isFirst) {
+        await this.sleep(this.staggerDelay);
+      }
+      isFirst = false;
 
       try {
         await this.spawnWorkerAndWait(nextId);
@@ -446,7 +459,7 @@ class SwarmManager {
     let neededMove = false;
     if (this.mainBot && this.mainBot.entity && this.mainBot.entity.position.distanceTo(origin) > 8) {
       if (this.mainBot.game?.gameMode === 'creative' && this.mainBot.creative && typeof this.mainBot.creative.flyTo === 'function') {
-        try { await withTimeout(this.mainBot.creative.flyTo(new Vec3(origin.x, origin.y + 1, origin.z)), 2000); } catch (_) {}
+        try { await withTimeout(this.mainBot.creative.flyTo(new Vec3(origin.x, origin.y + 1, origin.z)), 3000); } catch (_) {}
       } else if (this.mainBot.pathfinder) {
         try {
           const { goals } = require('mineflayer-pathfinder');
@@ -480,12 +493,26 @@ class SwarmManager {
       return mainBuilder.run(onProgress);
     }
 
-    console.log(`[Swarm Build] Distributing ${blocks.length} blocks across ${totalWorkers} builder bots!`);
-
-    const chunks = Array.from({ length: totalWorkers }, () => []);
-    for (let i = 0; i < blocks.length; i++) {
-      chunks[i % totalWorkers].push(blocks[i]);
+    console.log(`[Swarm Build] Distributing ${blocks.length} blocks across ${totalWorkers} builder bots using spatial partitioning!`);
+    // Spatial partitioning: find the bounding box and split along the longer horizontal axis (X or Z)
+    let minX = Infinity, maxX = -Infinity;
+    let minZ = Infinity, maxZ = -Infinity;
+    for (const b of blocks) {
+      if (b.pos.x < minX) minX = b.pos.x;
+      if (b.pos.x > maxX) maxX = b.pos.x;
+      if (b.pos.z < minZ) minZ = b.pos.z;
+      if (b.pos.z > maxZ) maxZ = b.pos.z;
     }
+
+    const splitAlongX = (maxX - minX) >= (maxZ - minZ);
+    // Sort blocks spatially along the chosen axis so contiguous slices form non-overlapping regions
+    const sorted = [...blocks].sort((a, b) => splitAlongX ? a.pos.x - b.pos.x : a.pos.z - b.pos.z);
+
+    // Partition into totalWorkers contiguous spatial slices
+    const chunkSize = Math.ceil(sorted.length / totalWorkers);
+    const chunks = Array.from({ length: totalWorkers }, (_, i) =>
+      sorted.slice(i * chunkSize, (i + 1) * chunkSize)
+    );
 
     let globalPlaced = 0;
     const total = blocks.length;

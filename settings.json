@@ -24,7 +24,7 @@
     "staggerJoinDelay": 15000,
     "autoAuthPassword": "chalol78",
     "antiAfk": true,
-    "placeDelayMs": 120
+    "placeDelayMs": 35
   },
   "builder": {
     "defaultBlock": "cobblestone"
