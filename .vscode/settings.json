@@ -1,6 +1,7 @@
 {
   "java.jdt.ls.java.home": "C:/Users/hp/jdk-25",
   "java.import.gradle.java.home": "C:/Users/hp/jdk-25",
+  "gradle.java.home": "C:/Users/hp/jdk-25",
   "java.configuration.runtimes": [
     {
       "name": "JavaSE-25",

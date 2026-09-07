@@ -3,7 +3,6 @@ package com.example.builderbot.build;
 import com.example.builderbot.BuilderBotMod;
 import com.example.builderbot.entity.BuilderBotEntity;
 import com.example.builderbot.entity.ModEntities;
-import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.EntitySpawnReason;
 import net.minecraft.world.phys.AABB;

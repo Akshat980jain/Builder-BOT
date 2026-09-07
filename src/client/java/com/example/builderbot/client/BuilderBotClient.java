@@ -22,6 +22,7 @@ public class BuilderBotClient implements ClientModInitializer {
     public static long lastStatusUpdate = 0;
 
     @Override
+    @SuppressWarnings("deprecation")
     public void onInitializeClient() {
         BuilderBotMod.LOGGER.info("[BuilderBot & MinerBot] Initialising client renderer, punch & right-click interaction screens…");
 

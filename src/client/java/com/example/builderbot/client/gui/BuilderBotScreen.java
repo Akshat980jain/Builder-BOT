@@ -236,19 +236,19 @@ public class BuilderBotScreen extends Screen {
         this.coordXBox = new EditBox(this.font, rightX, rightY + 42, boxW, 16, Component.literal("X"));
         this.coordXBox.setHint(Component.literal("X").withStyle(ChatFormatting.DARK_GRAY));
         this.coordXBox.setValue(savedCoordX);
-        this.coordXBox.setResponder(val -> this.savedCoordX = val);
+        this.coordXBox.setResponder(val -> savedCoordX = val);
         this.addRenderableWidget(coordXBox);
 
         this.coordYBox = new EditBox(this.font, rightX + boxW + 3, rightY + 42, boxW, 16, Component.literal("Y"));
         this.coordYBox.setHint(Component.literal("Y").withStyle(ChatFormatting.DARK_GRAY));
         this.coordYBox.setValue(savedCoordY);
-        this.coordYBox.setResponder(val -> this.savedCoordY = val);
+        this.coordYBox.setResponder(val -> savedCoordY = val);
         this.addRenderableWidget(coordYBox);
 
         this.coordZBox = new EditBox(this.font, rightX + (boxW * 2) + 6, rightY + 42, boxW, 16, Component.literal("Z"));
         this.coordZBox.setHint(Component.literal("Z").withStyle(ChatFormatting.DARK_GRAY));
         this.coordZBox.setValue(savedCoordZ);
-        this.coordZBox.setResponder(val -> this.savedCoordZ = val);
+        this.coordZBox.setResponder(val -> savedCoordZ = val);
         this.addRenderableWidget(coordZBox);
 
         // Quick Position Fill Buttons: [ 📍 My Pos ] [ 🤖 Bot Pos ]
@@ -292,12 +292,12 @@ public class BuilderBotScreen extends Screen {
     private void fillMyPosition() {
         if (Minecraft.getInstance().player != null) {
             BlockPos pos = Minecraft.getInstance().player.blockPosition();
-            this.savedCoordX = String.valueOf(pos.getX());
-            this.savedCoordY = String.valueOf(pos.getY());
-            this.savedCoordZ = String.valueOf(pos.getZ());
-            if (coordXBox != null) coordXBox.setValue(this.savedCoordX);
-            if (coordYBox != null) coordYBox.setValue(this.savedCoordY);
-            if (coordZBox != null) coordZBox.setValue(this.savedCoordZ);
+            savedCoordX = String.valueOf(pos.getX());
+            savedCoordY = String.valueOf(pos.getY());
+            savedCoordZ = String.valueOf(pos.getZ());
+            if (coordXBox != null) coordXBox.setValue(savedCoordX);
+            if (coordYBox != null) coordYBox.setValue(savedCoordY);
+            if (coordZBox != null) coordZBox.setValue(savedCoordZ);
         }
     }
 
@@ -320,12 +320,12 @@ public class BuilderBotScreen extends Screen {
     private void fillBotPosition() {
         BlockPos pos = (this.bot != null) ? this.bot.blockPosition() : findBotPosition();
         if (pos != null) {
-            this.savedCoordX = String.valueOf(pos.getX());
-            this.savedCoordY = String.valueOf(pos.getY());
-            this.savedCoordZ = String.valueOf(pos.getZ());
-            if (coordXBox != null) coordXBox.setValue(this.savedCoordX);
-            if (coordYBox != null) coordYBox.setValue(this.savedCoordY);
-            if (coordZBox != null) coordZBox.setValue(this.savedCoordZ);
+            savedCoordX = String.valueOf(pos.getX());
+            savedCoordY = String.valueOf(pos.getY());
+            savedCoordZ = String.valueOf(pos.getZ());
+            if (coordXBox != null) coordXBox.setValue(savedCoordX);
+            if (coordYBox != null) coordYBox.setValue(savedCoordY);
+            if (coordZBox != null) coordZBox.setValue(savedCoordZ);
         } else {
             fillMyPosition();
         }
