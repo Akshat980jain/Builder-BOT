@@ -447,39 +447,82 @@ class SwarmManager {
     if (this.mainBuilder) {
       try { this.mainBuilder.cancel(); } catch (_) {}
     }
+    if (this.mainBot) {
+      try {
+        if (this.mainBot.pathfinder) {
+          this.mainBot.pathfinder.stop();
+          this.mainBot.pathfinder.setGoal(null);
+        }
+      } catch (_) {}
+      try {
+        if (this.mainBot.creative && typeof this.mainBot.creative.stopFlying === 'function') {
+          this.mainBot.creative.stopFlying();
+        }
+      } catch (_) {}
+    }
     for (const w of this.workers.values()) {
       if (w && w.builder) {
         try { w.builder.cancel(); } catch (_) {}
+      }
+      if (w && w.bot) {
+        try {
+          if (w.bot.pathfinder) {
+            w.bot.pathfinder.stop();
+            w.bot.pathfinder.setGoal(null);
+          }
+        } catch (_) {}
+        try {
+          if (w.bot.creative && typeof w.bot.creative.stopFlying === 'function') {
+            w.bot.creative.stopFlying();
+          }
+        } catch (_) {}
       }
     }
   }
 
   async buildParallel(mainBuilder, blocks, origin, onProgress) {
-    // Ensure all connected workers & main bot move to build site safely
-    let neededMove = false;
-    if (this.mainBot && this.mainBot.entity && this.mainBot.entity.position.distanceTo(origin) > 8) {
-      if (this.mainBot.game?.gameMode === 'creative' && this.mainBot.creative && typeof this.mainBot.creative.flyTo === 'function') {
-        try { await withTimeout(this.mainBot.creative.flyTo(new Vec3(origin.x, origin.y + 1, origin.z)), 3000); } catch (_) {}
-      } else if (this.mainBot.pathfinder) {
+    // 1. Move all bots (main bot + workers) to origin safely and stop any conflicting pathfinders
+    const moveBotToOrigin = async (b) => {
+      if (!b || !b.entity) return;
+      if (b.entity.position.distanceTo(origin) <= 6) return;
+
+      // Attempt direct /tp first since bot is in creative/OP
+      try { b.chat(`/tp @s ${origin.x} ${origin.y + 1} ${origin.z}`); } catch (_) {}
+      await this.sleep(150);
+      if (b.entity.position.distanceTo(origin) <= 6) return;
+
+      // Flight or pathfinder fallback with strict timeout
+      if (b.game?.gameMode === 'creative' && b.creative && typeof b.creative.flyTo === 'function') {
+        try { await withTimeout(b.creative.flyTo(new Vec3(origin.x, origin.y + 1, origin.z)), 2000); } catch (_) {}
+      } else if (b.pathfinder) {
         try {
           const { goals } = require('mineflayer-pathfinder');
-          this.mainBot.pathfinder.setGoal(new goals.GoalNear(origin.x, origin.y + 1, origin.z, 2));
+          await withTimeout(b.pathfinder.goto(new goals.GoalNear(origin.x, origin.y + 1, origin.z, 3)), 3000);
         } catch (_) {}
       }
-      neededMove = true;
-    }
-
-    for (const w of this.workers.values()) {
-      if (w.connected && w.bot?.entity && w.bot.entity.position.distanceTo(origin) > 8) {
-        if (w.bot.game?.gameMode === 'creative' && w.bot.creative && typeof w.bot.creative.flyTo === 'function') {
-          try { w.bot.creative.flyTo(new Vec3(origin.x, origin.y + 1, origin.z)); } catch (_) {}
-        }
-        neededMove = true;
+      // CRITICAL: Stop pathfinder so it never fights block placement packets!
+      if (b.pathfinder) {
+        try { b.pathfinder.stop(); b.pathfinder.setGoal(null); } catch (_) {}
       }
+    };
+
+    const moveTasks = [];
+    if (this.mainBot) moveTasks.push(moveBotToOrigin(this.mainBot));
+    for (const w of this.workers.values()) {
+      if (w.connected && w.bot) moveTasks.push(moveBotToOrigin(w.bot));
+    }
+    if (moveTasks.length > 0) {
+      await Promise.allSettled(moveTasks);
+      await this.sleep(200);
     }
 
-    if (neededMove) {
-      await new Promise((r) => setTimeout(r, 600));
+    if (this.mainBot?.pathfinder) {
+      try { this.mainBot.pathfinder.stop(); this.mainBot.pathfinder.setGoal(null); } catch (_) {}
+    }
+    for (const w of this.workers.values()) {
+      if (w.bot?.pathfinder) {
+        try { w.bot.pathfinder.stop(); w.bot.pathfinder.setGoal(null); } catch (_) {}
+      }
     }
 
     const activeWorkers = Array.from(this.workers.values()).filter((w) => {

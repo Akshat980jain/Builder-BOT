@@ -24,6 +24,7 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.EntitySpawnReason;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.Vec3;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -41,10 +42,10 @@ public class BuilderBotCommands {
                         .executes(ctx -> executeSpawn(ctx.getSource())))
 
                 .then(Commands.literal("build")
-                        .then(Commands.argument("structure", IdentifierArgument.id())
+                        .then(Commands.argument("structure", StringArgumentType.greedyString())
                                 .executes(ctx -> executeBuild(
                                         ctx.getSource(),
-                                        IdentifierArgument.getId(ctx, "structure"),
+                                        StringArgumentType.getString(ctx, "structure"),
                                         1, 0))))
 
                 .then(Commands.literal("status")
@@ -160,10 +161,10 @@ public class BuilderBotCommands {
                                                         IntegerArgumentType.getInteger(ctx, "size"),
                                                         IntegerArgumentType.getInteger(ctx, "bots")))))
                                 .then(Commands.literal("build")
-                                        .then(Commands.argument("structure", IdentifierArgument.id())
+                                        .then(Commands.argument("structure", StringArgumentType.greedyString())
                                                 .executes(ctx -> executeBuild(
                                                         ctx.getSource(),
-                                                        IdentifierArgument.getId(ctx, "structure"),
+                                                        StringArgumentType.getString(ctx, "structure"),
                                                         IntegerArgumentType.getInteger(ctx, "bots"),
                                                         0))))
                                 .then(Commands.literal("undo")
@@ -188,9 +189,73 @@ public class BuilderBotCommands {
         return 1;
     }
 
-    private static int executeBuildSchematic(CommandSourceStack src, String filename, int botCount, int rotation) {
+    public record ParsedSchematicArgs(String filename, BlockPos origin, int rotation) {}
+
+    public static ParsedSchematicArgs parseSchematicArgs(CommandSourceStack src, String rawInput) {
+        String trimmed = rawInput.trim();
+        String[] tokens = trimmed.split("\\s+");
+        BlockPos defaultOrigin = BlockPos.containing(src.getPosition());
+
+        // Pattern A: <file...> <x> <y> <z> <rotation>
+        if (tokens.length >= 5 && isInteger(tokens[tokens.length - 4]) && isInteger(tokens[tokens.length - 3])
+                && isInteger(tokens[tokens.length - 2]) && isInteger(tokens[tokens.length - 1])) {
+            int rot = Integer.parseInt(tokens[tokens.length - 1]);
+            int z = Integer.parseInt(tokens[tokens.length - 2]);
+            int y = Integer.parseInt(tokens[tokens.length - 3]);
+            int x = Integer.parseInt(tokens[tokens.length - 4]);
+            StringBuilder fileSb = new StringBuilder();
+            for (int i = 0; i < tokens.length - 4; i++) {
+                if (i > 0) fileSb.append(" ");
+                fileSb.append(tokens[i]);
+            }
+            return new ParsedSchematicArgs(fileSb.toString(), new BlockPos(x, y, z), rot);
+        }
+
+        // Pattern B: <file...> <x> <y> <z>
+        if (tokens.length >= 4 && isInteger(tokens[tokens.length - 3]) && isInteger(tokens[tokens.length - 2])
+                && isInteger(tokens[tokens.length - 1])) {
+            int z = Integer.parseInt(tokens[tokens.length - 1]);
+            int y = Integer.parseInt(tokens[tokens.length - 2]);
+            int x = Integer.parseInt(tokens[tokens.length - 3]);
+            StringBuilder fileSb = new StringBuilder();
+            for (int i = 0; i < tokens.length - 3; i++) {
+                if (i > 0) fileSb.append(" ");
+                fileSb.append(tokens[i]);
+            }
+            return new ParsedSchematicArgs(fileSb.toString(), new BlockPos(x, y, z), 0);
+        }
+
+        // Pattern C: <file...> <rotation>
+        if (tokens.length >= 2 && isInteger(tokens[tokens.length - 1])) {
+            int rot = Integer.parseInt(tokens[tokens.length - 1]);
+            StringBuilder fileSb = new StringBuilder();
+            for (int i = 0; i < tokens.length - 1; i++) {
+                if (i > 0) fileSb.append(" ");
+                fileSb.append(tokens[i]);
+            }
+            return new ParsedSchematicArgs(fileSb.toString(), defaultOrigin, rot);
+        }
+
+        return new ParsedSchematicArgs(trimmed, defaultOrigin, 0);
+    }
+
+    private static boolean isInteger(String s) {
+        if (s == null || s.isEmpty()) return false;
+        try {
+            Integer.parseInt(s);
+            return true;
+        } catch (NumberFormatException e) {
+            return false;
+        }
+    }
+
+    private static int executeBuildSchematic(CommandSourceStack src, String rawInput, int botCount, int defaultRotation) {
         ServerLevel world = src.getLevel();
-        BlockPos origin = BlockPos.containing(src.getPosition());
+        ParsedSchematicArgs parsed = parseSchematicArgs(src, rawInput);
+        String filename = parsed.filename();
+        BlockPos origin = parsed.origin();
+        int rotation = parsed.rotation() != 0 ? parsed.rotation() : defaultRotation;
+
         Optional<BuildPlan> planOpt = SchematicManager.loadByName(filename, origin);
         if (planOpt.isEmpty()) {
             src.sendFailure(Component.literal("Failed to load schematic '" + filename + "'. Ensure file is in .minecraft/schematics/"));
@@ -205,9 +270,9 @@ public class BuilderBotCommands {
         final BuildPlan finalPlan = plan;
         PreviewManager.clearPreview();
         BuildHistoryManager.pushNewSession();
-        List<BuilderBotEntity> swarm = SwarmManager.deploySwarm(world, src.getPosition(), botCount, finalPlan);
+        List<BuilderBotEntity> swarm = SwarmManager.deploySwarm(world, new Vec3(origin.getX() + 0.5, origin.getY(), origin.getZ() + 0.5), botCount, finalPlan);
         src.sendSuccess(() -> Component.literal(
-                "✔ Deployed workforce of " + swarm.size() + " bots for schematic '" + filename + "' — " + finalPlan.total() + " blocks to place collaboratively!"), false);
+                "✔ Deployed workforce of " + swarm.size() + " bots for schematic '" + filename + "' at (" + origin.getX() + ", " + origin.getY() + ", " + origin.getZ() + ") rot " + rotation + "° — " + finalPlan.total() + " blocks to place collaboratively!"), false);
         return swarm.size();
     }
 
@@ -217,9 +282,13 @@ public class BuilderBotCommands {
         return 1;
     }
 
-    private static int executePreviewSchematic(CommandSourceStack src, String filename, int rotation) {
+    private static int executePreviewSchematic(CommandSourceStack src, String rawInput, int defaultRotation) {
         ServerLevel world = src.getLevel();
-        BlockPos origin = BlockPos.containing(src.getPosition());
+        ParsedSchematicArgs parsed = parseSchematicArgs(src, rawInput);
+        String filename = parsed.filename();
+        BlockPos origin = parsed.origin();
+        int rotation = parsed.rotation() != 0 ? parsed.rotation() : defaultRotation;
+
         Optional<BuildPlan> planOpt = SchematicManager.loadByName(filename, origin);
         if (planOpt.isEmpty()) {
             src.sendFailure(Component.literal("Schematic not found: " + filename));
@@ -253,7 +322,7 @@ public class BuilderBotCommands {
         int sizeY = maxY - minY + 1;
         int sizeZ = maxZ - minZ + 1;
         src.sendSuccess(() -> Component.literal(
-                "🔮 Hologram Active for '" + filename + "' (" + rotation + "°) — [" + sizeX + "W x " + sizeY + "H x " + sizeZ + "L] (" + tasks.size() + " blocks). Lasts 60s!"), false);
+                "🔮 Hologram Active for '" + filename + "' at (" + origin.getX() + ", " + origin.getY() + ", " + origin.getZ() + ") [" + rotation + "°] — [" + sizeX + "W x " + sizeY + "H x " + sizeZ + "L] (" + tasks.size() + " blocks). Lasts 60s!"), false);
         return 1;
     }
 
@@ -356,9 +425,19 @@ public class BuilderBotCommands {
         return 1;
     }
 
-    private static int executeBuild(CommandSourceStack src, Identifier structureId, int botCount, int rotation) {
+    private static int executeBuild(CommandSourceStack src, String rawInput, int botCount, int defaultRotation) {
         ServerLevel world = src.getLevel();
-        BlockPos origin = BlockPos.containing(src.getPosition());
+        ParsedSchematicArgs parsed = parseSchematicArgs(src, rawInput);
+        String structureStr = parsed.filename();
+        BlockPos origin = parsed.origin();
+        int rotation = parsed.rotation() != 0 ? parsed.rotation() : defaultRotation;
+
+        Identifier structureId = Identifier.tryParse(structureStr);
+        if (structureId == null) {
+            src.sendFailure(Component.literal("Invalid structure identifier: '" + structureStr + "'"));
+            return 0;
+        }
+
         Optional<BuildPlan> planOpt = SchematicLoader.load(world, structureId, origin);
         if (planOpt.isEmpty()) {
             src.sendFailure(Component.literal("Structure not found or empty: " + structureId
@@ -373,9 +452,9 @@ public class BuilderBotCommands {
 
         final BuildPlan finalPlan = plan;
         BuildHistoryManager.pushNewSession();
-        List<BuilderBotEntity> swarm = SwarmManager.deploySwarm(world, src.getPosition(), botCount, finalPlan);
+        List<BuilderBotEntity> swarm = SwarmManager.deploySwarm(world, new Vec3(origin.getX() + 0.5, origin.getY(), origin.getZ() + 0.5), botCount, finalPlan);
         src.sendSuccess(() -> Component.literal(
-                "✔ Deployed workforce of " + swarm.size() + " bots for structure '" + structureId + "' — " + finalPlan.total() + " blocks to place!"), false);
+                "✔ Deployed workforce of " + swarm.size() + " bots for structure '" + structureId + "' at (" + origin.getX() + ", " + origin.getY() + ", " + origin.getZ() + ") — " + finalPlan.total() + " blocks to place!"), false);
         return swarm.size();
     }
 

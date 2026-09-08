@@ -146,6 +146,11 @@ class Builder {
         this.bot.pathfinder.setGoal(null);
       }
     } catch (_) {}
+    try {
+      if (this.bot.creative && typeof this.bot.creative.stopFlying === 'function') {
+        this.bot.creative.stopFlying();
+      }
+    } catch (_) {}
   }
 
   /**
@@ -155,6 +160,8 @@ class Builder {
    */
   enqueue(offsetsOrBlocks, origin) {
     if (origin) this.originPos = origin;
+    this.queue = [];
+    this.cancelled = false;
     const list = [];
     for (const item of offsetsOrBlocks) {
       if (item instanceof Vec3) {
@@ -191,16 +198,27 @@ class Builder {
    * Main build execution loop.
    */
   async run(onProgress) {
-    if (this.building) throw new Error('Already building.');
+    if (this.building) {
+      this.cancel();
+      await sleep(60);
+    }
     this.building = true;
     this.cancelled = false;
     this._warnedGamemode = false;
+
+    // Release any lingering pathfinder control so it never fights block placement
+    if (this.bot && this.bot.pathfinder) {
+      try {
+        this.bot.pathfinder.stop();
+        this.bot.pathfinder.setGoal(null);
+      } catch (_) {}
+    }
 
     // Ensure creative mode & flight if possible
     if (this.bot && typeof this.bot.chat === 'function') {
       try { this.bot.chat(`/gamemode creative ${this.bot.username}`); } catch (_) {}
     }
-    await sleep(250);
+    await sleep(200);
 
     if (this.bot.creative && typeof this.bot.creative.startFlying === 'function') {
       try { this.bot.creative.startFlying(); } catch (_) {}
@@ -390,14 +408,18 @@ class Builder {
 
     if (bot.game?.gameMode === 'creative' && bot.creative && typeof bot.creative.flyTo === 'function') {
       try {
-        await withTimeout(bot.creative.flyTo(standPos), 1200);
+        await withTimeout(bot.creative.flyTo(standPos), 800);
       } catch (_) {
         bot.entity.position = standPos;
       }
     } else if (bot.pathfinder) {
       try {
         const { goals } = require('mineflayer-pathfinder');
-        await withTimeout(bot.pathfinder.goto(new goals.GoalNear(targetPos.x, targetPos.y, targetPos.z, 2.5)), 2500);
+        await withTimeout(bot.pathfinder.goto(new goals.GoalNear(targetPos.x, targetPos.y, targetPos.z, 2.5)), 1500);
+      } catch (_) {}
+      try {
+        bot.pathfinder.stop();
+        bot.pathfinder.setGoal(null);
       } catch (_) {}
     }
   }
@@ -420,8 +442,21 @@ class Builder {
       return;
     }
 
+    // Fast check: hotbar slot 36
+    if (bot.inventory && bot.inventory.slots[36]) {
+      const s36 = bot.inventory.slots[36];
+      if (s36.name === itemName || s36.name === cleanName) {
+        if (typeof bot.setQuickBarSlot === 'function') {
+          bot.setQuickBarSlot(0);
+        }
+        if (bot.heldItem && (bot.heldItem.name === itemName || bot.heldItem.name === cleanName)) {
+          return;
+        }
+      }
+    }
+
     // Look in inventory
-    let item = bot.inventory.items().find((i) => i.name === itemName || i.name === cleanName);
+    let item = bot.inventory ? bot.inventory.items().find((i) => i.name === itemName || i.name === cleanName) : null;
 
     // If creative mode and missing from inventory, provision into slot 36
     if (!item && bot.creative && typeof bot.creative.setInventorySlot === 'function') {
@@ -430,8 +465,11 @@ class Builder {
         const itemEntry = mcData?.itemsByName[itemName] || mcData?.blocksByName[cleanName];
         if (itemEntry) {
           const Item = PrismarineItem(bot.version || '1.21.4');
-          await withTimeout(bot.creative.setInventorySlot(36, new Item(itemEntry.id, 64)), 1000);
-          await sleep(50);
+          await withTimeout(bot.creative.setInventorySlot(36, new Item(itemEntry.id, 64)), 800);
+          await sleep(40);
+          if (typeof bot.setQuickBarSlot === 'function') {
+            bot.setQuickBarSlot(0);
+          }
           item = bot.inventory.slots[36] || bot.inventory.items().find((i) => i.name === itemName || i.name === cleanName);
         }
       } catch (_) {}

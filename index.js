@@ -886,7 +886,6 @@ function createBot() {
     const clean = message.trim();
     // Strictly ignore any messages from BuilderBot, swarm bots, or announcements
     if (
-      clean.includes('BuilderBot') ||
       clean.includes(BOT_USERNAME) ||
       clean.includes('[Builder') ||
       clean.includes('[Swarm') ||
@@ -896,22 +895,30 @@ function createBot() {
       clean.includes('[Movement') ||
       clean.includes('[Commands') ||
       clean.includes('[Undo') ||
-      clean.includes('not found') ||
-      clean.startsWith('[')
+      clean.includes('[Stop')
     ) return;
 
-    // Only match messages where a real player is speaking: <PlayerName> !command or PlayerName: !command
-    const cmdMatch = clean.match(/^(?:<([A-Za-z0-9_]{3,16})>|([A-Za-z0-9_]{3,16})\s*[:»>])\s*(![a-zA-Z0-9_-]+.*)$/);
-    if (cmdMatch) {
-      const sender = cmdMatch[1] || cmdMatch[2];
-      if (!sender || sender.toLowerCase().startsWith('builderbot') || sender === BOT_USERNAME) return;
-      const cmdText = cmdMatch[3].trim();
-      const now = Date.now();
-      if (cmdText === lastCmdText && now - lastCmdTime < 1000) return;
-      lastCmdTime = now;
-      lastCmdText = cmdText;
-      logSystem(`[Command via messagestr] From ${sender}: ${cmdText}`);
-      handleChatLine(sender, cmdText);
+    // Search for exclamation command anywhere in the line to support server prefixes, ranks, and custom formats
+    const bangIndex = clean.indexOf('!');
+    if (bangIndex !== -1) {
+      const cmdSub = clean.slice(bangIndex).trim();
+      const firstWord = cmdSub.split(/\s+/)[0].toLowerCase();
+      const validCmds = ['!stop', '!stopall', '!cancel', '!force-stop', '!undo', '!schematic', '!schematics', '!build', '!come', '!fly', '!cleararea', '!excavate', '!spawn', '!spawnall', '!despawn', '!despawnall', '!status', '!bots', '!swarm', '!swarmstatus', '!reconnect'];
+      if (validCmds.includes(firstWord)) {
+        let sender = 'player';
+        const prefix = clean.slice(0, bangIndex);
+        const nameMatch = prefix.match(/([A-Za-z0-9_]{3,16})\s*[:»>]/) || prefix.match(/<([A-Za-z0-9_]{3,16})>/);
+        if (nameMatch) sender = nameMatch[1];
+        if (sender && (sender.toLowerCase().startsWith('builderbot') || sender === BOT_USERNAME)) return;
+
+        const now = Date.now();
+        if (cmdSub === lastCmdText && now - lastCmdTime < 1000) return;
+        lastCmdTime = now;
+        lastCmdText = cmdSub;
+        logSystem(`[Command via messagestr] From ${sender}: ${cmdSub}`);
+        handleChatLine(sender, cmdSub);
+        return;
+      }
     }
   });
 
@@ -1161,6 +1168,7 @@ async function handleChatLine(username, text) {
     case 'undo':
       return runUndo(username);
     case 'stop':
+    case 'stopall':
     case 'force-stop':
     case 'cancel':
       return stopBuild(username);
@@ -1253,11 +1261,6 @@ async function runSchematicBuild(requester, name, coordInfo = { origin: null, ro
 
   builder.setJob(name);
   const origin = resolveOrigin(requester, coordInfo.origin);
-  if (bot.entity && bot.entity.position.distanceTo(origin) > 8) {
-    if (bot.game?.gameMode === 'creative' && bot.creative && typeof bot.creative.flyTo === 'function') {
-      try { await bot.creative.flyTo(new Vec3(origin.x, origin.y + 1, origin.z)); } catch (_) {}
-    }
-  }
   const workforce = swarm.getWorkerCount();
   safeChat(
     `[Builder] Building "${name}" (${blocks.length} blocks, rot ${coordInfo.rotation}°, workforce: ${workforce} bots) ` +
@@ -1297,12 +1300,13 @@ async function runUndo(requester) {
 }
 
 function stopBuild(requester) {
-  if (!builder.isBuilding()) {
-    safeChat(`Nothing in progress, ${requester}.`);
-    return;
+  if (swarm) {
+    try { swarm.cancelAll(); } catch (_) {}
   }
-  swarm.cancelAll();
-  builder.cancel();
+  if (builder) {
+    try { builder.cancel(); } catch (_) {}
+  }
+  logSystem(`[Stop] Build cancellation requested by ${requester}. Fleet stopped.`);
   safeChat('[Stop] Build stopped immediately across all fleet bots.');
 }
 

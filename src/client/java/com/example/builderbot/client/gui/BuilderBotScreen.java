@@ -14,6 +14,8 @@ import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.HitResult;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -70,19 +72,18 @@ public class BuilderBotScreen extends Screen {
         // Auto-switch all bots to creative mode
         ensureBotsInCreative();
 
-        // Only initialize coordinates if not already explicitly assigned by the user
-        if (savedCoordX.isEmpty() && savedCoordY.isEmpty() && savedCoordZ.isEmpty()) {
-            BlockPos botPos = (bot != null) ? bot.blockPosition() : findBotPosition();
-            if (botPos != null) {
-                savedCoordX = String.valueOf(botPos.getX());
-                savedCoordY = String.valueOf(botPos.getY());
-                savedCoordZ = String.valueOf(botPos.getZ());
-            } else if (Minecraft.getInstance().player != null) {
-                BlockPos pPos = Minecraft.getInstance().player.blockPosition();
-                savedCoordX = String.valueOf(pPos.getX());
-                savedCoordY = String.valueOf(pPos.getY());
-                savedCoordZ = String.valueOf(pPos.getZ());
-            }
+        // Dynamically fetch live coordinates whenever the GUI is opened:
+        // Prioritizes the exact block the player is looking at in crosshairs, falling back to standing position
+        BlockPos dynamicPos = detectTargetPosition();
+        if (dynamicPos != null) {
+            savedCoordX = String.valueOf(dynamicPos.getX());
+            savedCoordY = String.valueOf(dynamicPos.getY());
+            savedCoordZ = String.valueOf(dynamicPos.getZ());
+        } else if (bot != null) {
+            BlockPos botPos = bot.blockPosition();
+            savedCoordX = String.valueOf(botPos.getX());
+            savedCoordY = String.valueOf(botPos.getY());
+            savedCoordZ = String.valueOf(botPos.getZ());
         }
     }
 
@@ -251,18 +252,24 @@ public class BuilderBotScreen extends Screen {
         this.coordZBox.setResponder(val -> savedCoordZ = val);
         this.addRenderableWidget(coordZBox);
 
-        // Quick Position Fill Buttons: [ 📍 My Pos ] [ 🤖 Bot Pos ]
-        int posBtnW = (rightW - 4) / 2;
+        // Quick Position Fill Buttons: [ 🎯 Target ] [ 📍 My Pos ] [ 🤖 Bot Pos ]
+        int posBtnW = (rightW - 6) / 3;
+        Button targetBtn = Button.builder(
+                Component.literal("🎯 Target").withStyle(ChatFormatting.GREEN),
+                btn -> fillTargetPosition()
+        ).bounds(rightX, rightY + 62, posBtnW, 18).build();
+        addPageWidget(targetBtn);
+
         Button myPosBtn = Button.builder(
                 Component.literal("📍 My Pos").withStyle(ChatFormatting.AQUA),
                 btn -> fillMyPosition()
-        ).bounds(rightX, rightY + 62, posBtnW, 18).build();
+        ).bounds(rightX + posBtnW + 3, rightY + 62, posBtnW, 18).build();
         addPageWidget(myPosBtn);
 
         Button botPosBtn = Button.builder(
                 Component.literal("🤖 Bot Pos").withStyle(ChatFormatting.YELLOW),
                 btn -> fillBotPosition()
-        ).bounds(rightX + posBtnW + 4, rightY + 62, posBtnW, 18).build();
+        ).bounds(rightX + (posBtnW * 2) + 6, rightY + 62, posBtnW, 18).build();
         addPageWidget(botPosBtn);
 
         // 3D Block-by-Block Ghost Preview In World Button
@@ -287,6 +294,30 @@ public class BuilderBotScreen extends Screen {
                 btn -> onManualBuild()
         ).bounds(rightX + rightW - 42, rightY + 106, 42, 18).build();
         addPageWidget(manualBuildBtn);
+    }
+
+    public static BlockPos detectTargetPosition() {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc.hitResult instanceof BlockHitResult blockHit && blockHit.getType() == HitResult.Type.BLOCK) {
+            // Target the open air block directly above or against the targeted surface
+            return blockHit.getBlockPos().relative(blockHit.getDirection());
+        }
+        if (mc.player != null) {
+            return mc.player.blockPosition();
+        }
+        return null;
+    }
+
+    private void fillTargetPosition() {
+        BlockPos pos = detectTargetPosition();
+        if (pos != null) {
+            savedCoordX = String.valueOf(pos.getX());
+            savedCoordY = String.valueOf(pos.getY());
+            savedCoordZ = String.valueOf(pos.getZ());
+            if (coordXBox != null) coordXBox.setValue(savedCoordX);
+            if (coordYBox != null) coordYBox.setValue(savedCoordY);
+            if (coordZBox != null) coordZBox.setValue(savedCoordZ);
+        }
     }
 
     private void fillMyPosition() {
@@ -342,6 +373,10 @@ public class BuilderBotScreen extends Screen {
                 int z = (int) Math.floor(Double.parseDouble(zs.replace(",", "")));
                 return new BlockPos(x, y, z);
             } catch (NumberFormatException ignored) {}
+        }
+        BlockPos targetPos = detectTargetPosition();
+        if (targetPos != null) {
+            return targetPos;
         }
         BlockPos botPos = (this.bot != null) ? this.bot.blockPosition() : findBotPosition();
         if (botPos != null) {
@@ -666,6 +701,12 @@ public class BuilderBotScreen extends Screen {
                 conn.sendChat("!undo");
             } else if (command.equals("builderbot stop") || command.equals("builderbot stopall")) {
                 conn.sendChat("!stop");
+                conn.sendChat("!stopall");
+                if (Minecraft.getInstance().player != null) {
+                    Minecraft.getInstance().player.sendSystemMessage(
+                        Component.literal("§c[BuilderBot] Stopping all fleet bots immediately..."));
+                }
+                conn.sendCommand("builderbot stopall");
             } else if (command.equals("builderbot tp")) {
                 conn.sendChat("!come");
             } else if (command.equals("builderbot fly")) {
@@ -694,7 +735,7 @@ public class BuilderBotScreen extends Screen {
             }
 
             // Also invoke internal command if running in singleplayer server
-            if (Minecraft.getInstance().hasSingleplayerServer()) {
+            if (Minecraft.getInstance().hasSingleplayerServer() && !command.equals("builderbot stopall") && !command.equals("builderbot stop")) {
                 conn.sendCommand(command);
             }
         }
