@@ -24,8 +24,8 @@
   },
   "builder": {
     "defaultBlock": "cobblestone",
-    "placeDelayMs": 40,
-    "creativeDelayMs": 25,
+    "placeDelayMs": 15,
+    "creativeDelayMs": 5,
     "scaffoldBlock": "dirt",
     "autoClearArea": false,
     "defaultOrigin": {

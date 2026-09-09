@@ -77,8 +77,8 @@ class BuilderManager {
     };
 
     this._mcDataCache = null;
-    this.placeDelayMs = this.config.builder?.placeDelayMs || 40;
-    this.creativeDelayMs = this.config.builder?.creativeDelayMs || 25;
+    this.placeDelayMs = this.config.builder?.placeDelayMs !== undefined ? this.config.builder.placeDelayMs : 20;
+    this.creativeDelayMs = this.config.builder?.creativeDelayMs !== undefined ? this.config.builder.creativeDelayMs : 10;
     this.canUseSetblock = true;
     this.lastCommandTime = 0;
     this.isWorker = Boolean(this.config.isWorker);
@@ -394,6 +394,11 @@ class BuilderManager {
     const cleanName = rawName.replace(/^minecraft:/, "").toLowerCase();
     const itemName = blockToItemName(rawName);
 
+    // High-speed optimization: If item is ALREADY in hand, return immediately (0ms)!
+    if (bot.heldItem && (bot.heldItem.name === itemName || bot.heldItem.name === cleanName)) {
+      return true;
+    }
+
     let item = bot.inventory.items().find((i) => i.name === itemName || i.name === cleanName);
 
     if (!item && bot.game?.gameMode === "creative") {
@@ -402,8 +407,8 @@ class BuilderManager {
         const itemEntry = mcData?.itemsByName[itemName] || mcData?.blocksByName[cleanName];
         if (itemEntry && typeof bot.creative?.setInventorySlot === "function") {
           const ItemClass = PrismarineItem(bot.version || "1.21.4");
-          await withTimeout(bot.creative.setInventorySlot(36, new ItemClass(itemEntry.id, 64)), 600);
-          await sleep(25);
+          await withTimeout(bot.creative.setInventorySlot(36, new ItemClass(itemEntry.id, 64)), 400);
+          await sleep(10);
           if (typeof bot.setQuickBarSlot === "function") bot.setQuickBarSlot(0);
           item = bot.inventory.slots[36] || bot.inventory.items().find((i) => i.name === itemName || i.name === cleanName);
         }
@@ -450,9 +455,13 @@ class BuilderManager {
         if (curVoxel && !curVoxel.name.includes("air")) continue;
 
         try {
-          await bot.placeBlock(belowBlock, new Vec3(0, 1, 0));
+          if (typeof bot._genericPlace === "function") {
+            await bot._genericPlace(belowBlock, new Vec3(0, 1, 0), { swingArm: "right", forceLook: true });
+          } else {
+            await bot.placeBlock(belowBlock, new Vec3(0, 1, 0));
+          }
           this.scaffoldHistory.push(targetVoxel);
-          await sleep(25);
+          await sleep(10);
         } catch (_) {
           break;
         }
@@ -463,7 +472,7 @@ class BuilderManager {
       try {
         this.bot.chat(cmd);
         this.scaffoldHistory.push(scaffoldPos);
-        await sleep(60);
+        await sleep(40);
       } catch (_) {}
     }
   }
@@ -477,16 +486,18 @@ class BuilderManager {
 
     const dx = bot.entity.position.x > targetPos.x ? 2.0 : -2.0;
     const dz = bot.entity.position.z > targetPos.z ? 2.0 : -2.0;
-    const standPos = new Vec3(targetPos.x + dx, targetPos.y, targetPos.z + dz);
+    const standPos = new Vec3(targetPos.x + dx, targetPos.y + 1.0, targetPos.z + dz);
 
-    if (bot.pathfinder) {
+    if (bot.game?.gameMode === "creative" && bot.creative && typeof bot.creative.flyTo === "function") {
+      try {
+        await withTimeout(bot.creative.flyTo(standPos), 400);
+      } catch (_) {
+        bot.entity.position = standPos;
+      }
+    } else if (bot.pathfinder) {
       try {
         const { goals } = require("mineflayer-pathfinder");
-        await withTimeout(bot.pathfinder.goto(new goals.GoalNear(targetPos.x, targetPos.y, targetPos.z, 3.5)), 1200);
-      } catch (_) {}
-    } else if (bot.game?.gameMode === "creative" && bot.creative && typeof bot.creative.flyTo === "function") {
-      try {
-        await withTimeout(bot.creative.flyTo(standPos), 600);
+        await withTimeout(bot.pathfinder.goto(new goals.GoalNear(targetPos.x, targetPos.y, targetPos.z, 3.5)), 600);
       } catch (_) {}
     }
   }
@@ -524,7 +535,15 @@ class BuilderManager {
           if (refInfo) {
             const refBlock = bot.blockAt(refInfo.refPos) || refInfo.refBlock;
             if (refBlock) {
-              await bot.placeBlock(refBlock, refInfo.faceVector);
+              // High-speed pipelined packet placement: does NOT block on server roundtrip lag!
+              if (typeof bot._genericPlace === "function") {
+                await bot._genericPlace(refBlock, refInfo.faceVector, {
+                  swingArm: "right",
+                  forceLook: true
+                });
+              } else {
+                await bot.placeBlock(refBlock, refInfo.faceVector);
+              }
               return true;
             }
           }
