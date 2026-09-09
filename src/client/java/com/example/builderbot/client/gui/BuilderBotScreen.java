@@ -21,12 +21,17 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * High-performance modern Sci-Fi Command Suite for Minecraft Builder Bot.
+ * Provides streamlined schematic selection, 3D ghost block holograms,
+ * instant coordinate snapping, rotation matrix, and swarm fleet management.
+ */
 @Environment(EnvType.CLIENT)
 public class BuilderBotScreen extends Screen {
 
     private final net.minecraft.world.entity.Entity bot;
 
-    // Tabs: 0 = Schematics, 1 = Swarm Fleet & Tools
+    // Tabs: 0 = Schematics & Construction, 1 = Swarm Fleet & Site Tools
     private int currentTab = 0;
 
     // Schematics list & scrolling
@@ -34,14 +39,14 @@ public class BuilderBotScreen extends Screen {
     private List<File> filteredSchematicFiles = new ArrayList<>();
     private int selectedSchematicIndex = -1;
     private int scrollOffset = 0;
-    private static final int VISIBLE_ITEMS = 5;
+    private static final int VISIBLE_ITEMS = 6;
     private static final int ITEM_HEIGHT = 18;
 
     // Transformation state
     private int selectedRotation = 0; // 0, 90, 180, 270
 
-    // Workforce count state
-    private static int selectedBotCount = 3;
+    // Workforce count state (1 to 10)
+    private static int selectedBotCount = 10;
 
     // Modal state
     private boolean showDespawnModal = false;
@@ -61,7 +66,7 @@ public class BuilderBotScreen extends Screen {
     private Button approveDespawnAllBtn;
     private Button cancelDespawnBtn;
 
-    // Window Layout
+    // Window Layout Dimensions
     private int winX, winY, winW, winH;
     private int listX, listY, listW, listH;
 
@@ -69,11 +74,11 @@ public class BuilderBotScreen extends Screen {
         super(Component.literal("Builder Bot Control Suite"));
         this.bot = bot;
 
-        // Auto-switch all bots to creative mode
+        // Auto-switch all bots to OP and Creative mode immediately on opening
         ensureBotsInCreative();
 
-        // Dynamically fetch live coordinates whenever the GUI is opened:
-        // Prioritizes the exact block the player is looking at in crosshairs, falling back to standing position
+        // Dynamically fetch live coordinates:
+        // Prioritizes crosshair target block, falling back to standing position
         BlockPos dynamicPos = detectTargetPosition();
         if (dynamicPos != null) {
             savedCoordX = String.valueOf(dynamicPos.getX());
@@ -97,13 +102,14 @@ public class BuilderBotScreen extends Screen {
         tabButtons.clear();
         activePageWidgets.clear();
 
-        this.winW = 410;
-        this.winH = 250;
+        // Expansive, balanced modern window size
+        this.winW = 440;
+        this.winH = 265;
         this.winX = (this.width - winW) / 2;
         this.winY = (this.height - winH) / 2;
 
         this.listX = winX + 14;
-        this.listY = winY + 74;
+        this.listY = winY + 76;
         this.listW = 185;
         this.listH = VISIBLE_ITEMS * ITEM_HEIGHT;
 
@@ -112,14 +118,16 @@ public class BuilderBotScreen extends Screen {
         // ── TOP TAB NAVIGATION BUTTONS ────────────────────────────────────────
         int tabW = (winW - 28) / 2;
         Button tab0Btn = Button.builder(
-                Component.literal("📁 Schematics (NBT / Litematica)").withStyle(currentTab == 0 ? ChatFormatting.GOLD : ChatFormatting.GRAY),
+                Component.literal(currentTab == 0 ? "⚡ 1. Blueprints & Build" : "📁 1. Blueprints & Build")
+                        .withStyle(currentTab == 0 ? ChatFormatting.AQUA : ChatFormatting.GRAY),
                 btn -> { currentTab = 0; this.init(); }
         ).bounds(winX + 14, winY + 28, tabW, 18).build();
         tabButtons.add(tab0Btn);
         this.addRenderableWidget(tab0Btn);
 
         Button tab1Btn = Button.builder(
-                Component.literal("⚙ Swarm Fleet & Tools").withStyle(currentTab == 1 ? ChatFormatting.GOLD : ChatFormatting.GRAY),
+                Component.literal(currentTab == 1 ? "⚡ 2. Swarm Fleet & Tools" : "⚙ 2. Swarm Fleet & Tools")
+                        .withStyle(currentTab == 1 ? ChatFormatting.AQUA : ChatFormatting.GRAY),
                 btn -> { currentTab = 1; this.init(); }
         ).bounds(winX + 14 + tabW, winY + 28, tabW, 18).build();
         tabButtons.add(tab1Btn);
@@ -131,11 +139,11 @@ public class BuilderBotScreen extends Screen {
             case 1 -> initToolsTab();
         }
 
-        // Bottom Bar: Close Button
+        // Bottom Bar: Close Menu Button
         Button closeBtn = Button.builder(
-                Component.literal("✖ Close Menu"),
+                Component.literal("✖ Close").withStyle(ChatFormatting.WHITE),
                 btn -> this.onClose()
-        ).bounds(winX + (winW / 2) - 50, winY + winH - 24, 100, 18).build();
+        ).bounds(winX + winW - 68, winY + winH - 22, 54, 16).build();
         addPageWidget(closeBtn);
 
         // ── DESPAWN CONFIRMATION MODAL BUTTONS ────────────────────────────────
@@ -145,7 +153,7 @@ public class BuilderBotScreen extends Screen {
         int modalY = (this.height - modalH) / 2;
 
         this.approveDespawnThisBtn = Button.builder(
-                Component.literal("💨 Despawn This Bot").withStyle(ChatFormatting.RED),
+                Component.literal("💨 Despawn Extra").withStyle(ChatFormatting.RED),
                 btn -> {
                     runCommand("builderbot despawn");
                     this.onClose();
@@ -153,7 +161,7 @@ public class BuilderBotScreen extends Screen {
         ).bounds(modalX + 12, modalY + 62, (modalW / 2) - 16, 22).build();
 
         this.approveDespawnAllBtn = Button.builder(
-                Component.literal("💥 Despawn ALL Bots").withStyle(ChatFormatting.DARK_RED, ChatFormatting.BOLD),
+                Component.literal("💥 Despawn ALL").withStyle(ChatFormatting.DARK_RED, ChatFormatting.BOLD),
                 btn -> {
                     runCommand("builderbot despawnall");
                     this.onClose();
@@ -161,7 +169,7 @@ public class BuilderBotScreen extends Screen {
         ).bounds(modalX + (modalW / 2) + 4, modalY + 62, (modalW / 2) - 16, 22).build();
 
         this.cancelDespawnBtn = Button.builder(
-                Component.literal("✖ CANCEL (Keep Bots)").withStyle(ChatFormatting.GREEN),
+                Component.literal("✖ Cancel (Keep Fleet)").withStyle(ChatFormatting.GREEN),
                 btn -> setDespawnModalVisible(false)
         ).bounds(modalX + 12, modalY + 88, modalW - 24, 20).build();
 
@@ -178,101 +186,90 @@ public class BuilderBotScreen extends Screen {
         this.addRenderableWidget(button);
     }
 
-    // ── TAB 0: SCHEMATICS BROWSER & ROTATION ─────────────────────────────────
+    // ── TAB 0: SCHEMATICS BROWSER & CONSTRUCTION DECK ────────────────────────
     private void initSchematicsTab() {
-        this.searchBox = new EditBox(this.font, listX, winY + 52, listW - 40, 16, Component.literal("Search"));
-        this.searchBox.setHint(Component.literal("🔍 Search...").withStyle(ChatFormatting.DARK_GRAY));
+        // Left Column: Search Box
+        this.searchBox = new EditBox(this.font, listX, winY + 54, listW, 16, Component.literal("Search"));
+        this.searchBox.setHint(Component.literal("🔍 Search blueprints...").withStyle(ChatFormatting.DARK_GRAY));
         this.searchBox.setMaxLength(64);
         this.searchBox.setResponder(this::filterSchematics);
         this.addRenderableWidget(searchBox);
 
-        Button scrollUpBtn = Button.builder(Component.literal("▲"), btn -> scrollBy(-1))
-                .bounds(listX + listW - 36, winY + 52, 16, 16).build();
-        addPageWidget(scrollUpBtn);
-
-        Button scrollDownBtn = Button.builder(Component.literal("▼"), btn -> scrollBy(1))
-                .bounds(listX + listW - 18, winY + 52, 16, 16).build();
-        addPageWidget(scrollDownBtn);
-
-        // Action controls
-        Button buildSelectedBtn = Button.builder(
-                Component.literal("🏗 Build Selected").withStyle(ChatFormatting.GOLD, ChatFormatting.BOLD),
-                btn -> onBuildSelectedSchematic()
-        ).bounds(listX, listY + listH + 4, listW, 20).build();
-        addPageWidget(buildSelectedBtn);
-
+        // Action controls beneath list
         Button openFolderBtn = Button.builder(
                 Component.literal("📂 Folder"),
                 btn -> SchematicManager.openSchematicsFolder()
-        ).bounds(listX, listY + listH + 26, (listW / 2) - 2, 18).build();
+        ).bounds(listX, listY + listH + 6, (listW / 2) - 2, 18).build();
         addPageWidget(openFolderBtn);
 
         Button refreshBtn = Button.builder(
-                Component.literal("🔄 Refresh"),
+                Component.literal("🔄 Reload"),
                 btn -> { loadSchematics(); this.scrollOffset = 0; }
-        ).bounds(listX + (listW / 2) + 2, listY + listH + 26, (listW / 2) - 2, 18).build();
+        ).bounds(listX + (listW / 2) + 2, listY + listH + 6, (listW / 2) - 2, 18).build();
         addPageWidget(refreshBtn);
 
-        // Right side: Hologram Preview, Rotation, Coordinates & Swarm Stepper
-        int rightX = winX + 212;
-        int rightY = winY + 52;
-        int rightW = winW - 226;
+        // Right Column: Construction Controls
+        int rightX = winX + 214;
+        int rightY = winY + 54;
+        int rightW = winW - 228;
 
-        // Workforce Stepper
-        initWorkforceStepper(rightX, rightY, rightW);
-
-        // Rotation Selector: [ ⟲ 0° ] [ 90° ] [ 180° ] [ 270° ]
-        int rotW = (rightW - 6) / 4;
-        for (int i = 0; i < 4; i++) {
-            final int deg = i * 90;
-            Button rotBtn = Button.builder(
-                    Component.literal(deg + "°").withStyle(selectedRotation == deg ? ChatFormatting.GOLD : ChatFormatting.WHITE),
-                    btn -> { this.selectedRotation = deg; this.init(); }
-            ).bounds(rightX + (i * (rotW + 2)), rightY + 22, rotW, 16).build();
-            addPageWidget(rotBtn);
-        }
-
-        // Coordinates Inputs (X, Y, Z)
+        // 1. Coordinates Inputs: [X] [Y] [Z]
         int boxW = (rightW - 6) / 3;
-        this.coordXBox = new EditBox(this.font, rightX, rightY + 42, boxW, 16, Component.literal("X"));
+        this.coordXBox = new EditBox(this.font, rightX, rightY + 14, boxW, 16, Component.literal("X"));
         this.coordXBox.setHint(Component.literal("X").withStyle(ChatFormatting.DARK_GRAY));
         this.coordXBox.setValue(savedCoordX);
         this.coordXBox.setResponder(val -> savedCoordX = val);
         this.addRenderableWidget(coordXBox);
 
-        this.coordYBox = new EditBox(this.font, rightX + boxW + 3, rightY + 42, boxW, 16, Component.literal("Y"));
+        this.coordYBox = new EditBox(this.font, rightX + boxW + 3, rightY + 14, boxW, 16, Component.literal("Y"));
         this.coordYBox.setHint(Component.literal("Y").withStyle(ChatFormatting.DARK_GRAY));
         this.coordYBox.setValue(savedCoordY);
         this.coordYBox.setResponder(val -> savedCoordY = val);
         this.addRenderableWidget(coordYBox);
 
-        this.coordZBox = new EditBox(this.font, rightX + (boxW * 2) + 6, rightY + 42, boxW, 16, Component.literal("Z"));
+        this.coordZBox = new EditBox(this.font, rightX + (boxW * 2) + 6, rightY + 14, boxW, 16, Component.literal("Z"));
         this.coordZBox.setHint(Component.literal("Z").withStyle(ChatFormatting.DARK_GRAY));
         this.coordZBox.setValue(savedCoordZ);
         this.coordZBox.setResponder(val -> savedCoordZ = val);
         this.addRenderableWidget(coordZBox);
 
-        // Quick Position Fill Buttons: [ 🎯 Target ] [ 📍 My Pos ] [ 🤖 Bot Pos ]
-        int posBtnW = (rightW - 6) / 3;
-        Button targetBtn = Button.builder(
+        // 2. Position Auto-Snap Chips: [ 🎯 Crosshair ] [ 📍 My Pos ] [ 🤖 Bot Pos ]
+        int chipW = (rightW - 6) / 3;
+        Button crosshairBtn = Button.builder(
                 Component.literal("🎯 Target").withStyle(ChatFormatting.GREEN),
                 btn -> fillTargetPosition()
-        ).bounds(rightX, rightY + 62, posBtnW, 18).build();
-        addPageWidget(targetBtn);
+        ).bounds(rightX, rightY + 34, chipW, 16).build();
+        addPageWidget(crosshairBtn);
 
         Button myPosBtn = Button.builder(
-                Component.literal("📍 My Pos").withStyle(ChatFormatting.AQUA),
+                Component.literal("📍 Player").withStyle(ChatFormatting.AQUA),
                 btn -> fillMyPosition()
-        ).bounds(rightX + posBtnW + 3, rightY + 62, posBtnW, 18).build();
+        ).bounds(rightX + chipW + 3, rightY + 34, chipW, 16).build();
         addPageWidget(myPosBtn);
 
         Button botPosBtn = Button.builder(
-                Component.literal("🤖 Bot Pos").withStyle(ChatFormatting.YELLOW),
+                Component.literal("🤖 Bot").withStyle(ChatFormatting.YELLOW),
                 btn -> fillBotPosition()
-        ).bounds(rightX + (posBtnW * 2) + 6, rightY + 62, posBtnW, 18).build();
+        ).bounds(rightX + (chipW * 2) + 6, rightY + 34, chipW, 16).build();
         addPageWidget(botPosBtn);
 
-        // 3D Block-by-Block Ghost Preview In World Button
+        // 3. Orientation / Rotation Compass Buttons: [ 0° N ] [ 90° E ] [ 180° S ] [ 270° W ]
+        int rotW = (rightW - 6) / 4;
+        String[] rotLabels = { "0° N", "90° E", "180° S", "270° W" };
+        for (int i = 0; i < 4; i++) {
+            final int deg = i * 90;
+            boolean isSelected = (selectedRotation == deg);
+            Button rotBtn = Button.builder(
+                    Component.literal(rotLabels[i]).withStyle(isSelected ? ChatFormatting.GOLD : ChatFormatting.WHITE),
+                    btn -> { this.selectedRotation = deg; this.init(); }
+            ).bounds(rightX + (i * (rotW + 2)), rightY + 66, rotW, 16).build();
+            addPageWidget(rotBtn);
+        }
+
+        // 4. Workforce Stepper
+        initWorkforceStepper(rightX, rightY + 98, rightW);
+
+        // 5. 3D Ghost Blueprint Overlay Toggle
         boolean hasGhost = com.example.builderbot.client.render.ClientGhostRenderer.hasActiveGhost();
         Component previewLabel = hasGhost
                 ? Component.literal("❌ Clear 3D Ghost Blocks").withStyle(ChatFormatting.RED, ChatFormatting.BOLD)
@@ -281,25 +278,31 @@ public class BuilderBotScreen extends Screen {
         Button previewBtn = Button.builder(
                 previewLabel,
                 btn -> onPreviewSchematic()
-        ).bounds(rightX, rightY + 84, rightW, 18).build();
+        ).bounds(rightX, rightY + 120, rightW, 17).build();
         addPageWidget(previewBtn);
 
-        // Manual build input box
-        this.structureInput = new EditBox(this.font, rightX, rightY + 106, rightW - 46, 18, Component.literal("ID"));
-        this.structureInput.setHint(Component.literal("Structure ID...").withStyle(ChatFormatting.DARK_GRAY));
+        // 6. Prominent Primary Action: [ 🚀 LAUNCH SWARM BUILD ]
+        Button launchBuildBtn = Button.builder(
+                Component.literal("🚀 LAUNCH SWARM BUILD").withStyle(ChatFormatting.GOLD, ChatFormatting.BOLD),
+                btn -> onBuildSelectedSchematic()
+        ).bounds(rightX, rightY + 140, rightW, 20).build();
+        addPageWidget(launchBuildBtn);
+
+        // 7. Manual Structure ID Input Bar
+        this.structureInput = new EditBox(this.font, rightX, rightY + 164, rightW - 46, 16, Component.literal("ID"));
+        this.structureInput.setHint(Component.literal("Structure / shape ID...").withStyle(ChatFormatting.DARK_GRAY));
         this.addRenderableWidget(structureInput);
 
         Button manualBuildBtn = Button.builder(
                 Component.literal("Build").withStyle(ChatFormatting.GREEN),
                 btn -> onManualBuild()
-        ).bounds(rightX + rightW - 42, rightY + 106, 42, 18).build();
+        ).bounds(rightX + rightW - 42, rightY + 164, 42, 16).build();
         addPageWidget(manualBuildBtn);
     }
 
     public static BlockPos detectTargetPosition() {
         Minecraft mc = Minecraft.getInstance();
         if (mc.hitResult instanceof BlockHitResult blockHit && blockHit.getType() == HitResult.Type.BLOCK) {
-            // Target the open air block directly above or against the targeted surface
             return blockHit.getBlockPos().relative(blockHit.getDirection());
         }
         if (mc.player != null) {
@@ -385,35 +388,49 @@ public class BuilderBotScreen extends Screen {
         return selectedRotation > 0 ? " " + selectedRotation : "";
     }
 
-    // ── TAB 1: SWARM CONTROLS, FLEET & UNDO ─────────────────────────────
+    // ── TAB 1: SWARM FLEET & TACTICAL TOOLS ──────────────────────────────────
     private void initToolsTab() {
         int leftX = winX + 14;
-        int rightX = winX + 212;
-        int btnW = 185;
-        int startY = winY + 54;
+        int cardW = (winW - 36) / 2;
+        int rightX = leftX + cardW + 8;
+        int startY = winY + 68;
 
-        // Workforce Stepper
-        initWorkforceStepper(leftX, startY, btnW);
+        // LEFT CARD: FLEET CONTROLS
+        initWorkforceStepper(leftX, startY, cardW);
 
-        // Undo Last Build
-        Button undoBtn = Button.builder(
-                Component.literal("⏪ Undo Last Build").withStyle(ChatFormatting.YELLOW, ChatFormatting.BOLD),
-                btn -> { runCommand("builderbot undo"); this.onClose(); }
-        ).bounds(leftX, startY + 24, btnW, 22).build();
-        addPageWidget(undoBtn);
+        // Quick Preset Buttons: [ 1 Solo ] [ 3 Squad ] [ 5 Team ] [ 10 Max ]
+        int pW = (cardW - 6) / 4;
+        int[] presets = { 1, 3, 5, 10 };
+        String[] pLabels = { "1", "3", "5", "10" };
+        for (int i = 0; i < 4; i++) {
+            final int count = presets[i];
+            Button pBtn = Button.builder(
+                    Component.literal(pLabels[i] + " Bots").withStyle(selectedBotCount == count ? ChatFormatting.GOLD : ChatFormatting.WHITE),
+                    btn -> { selectedBotCount = count; this.init(); }
+            ).bounds(leftX + (i * (pW + 2)), startY + 20, pW, 16).build();
+            addPageWidget(pBtn);
+        }
 
-        // Excavation & Terrain Clearing
-        Button clearArea16 = Button.builder(
-                Component.literal("🚜 Clear Area (16x16x16)"),
-                btn -> { runCommand("builderbot cleararea 8 16"); this.onClose(); }
-        ).bounds(leftX, startY + 50, btnW, 20).build();
-        addPageWidget(clearArea16);
+        // Re-Enforce OP & Creative
+        Button reopBtn = Button.builder(
+                Component.literal("👑 Re-Op & Creative Mode").withStyle(ChatFormatting.GOLD),
+                btn -> {
+                    ensureBotsInCreative();
+                    runCommand("builderbot op");
+                    if (Minecraft.getInstance().player != null) {
+                        Minecraft.getInstance().player.sendSystemMessage(
+                                Component.literal("§a[BuilderBot] Operator role and Creative mode enforced across fleet!"));
+                    }
+                }
+        ).bounds(leftX, startY + 42, cardW, 18).build();
+        addPageWidget(reopBtn);
 
-        Button clearArea32 = Button.builder(
-                Component.literal("🚜 Mega Clear (32x32x24)"),
-                btn -> { runCommand("builderbot cleararea 16 24"); this.onClose(); }
-        ).bounds(leftX, startY + 74, btnW, 20).build();
-        addPageWidget(clearArea32);
+        // Teleport Fleet to Me
+        Button tpBtn = Button.builder(
+                Component.literal("📍 Teleport Fleet to Me").withStyle(ChatFormatting.YELLOW),
+                btn -> { runCommand("builderbot tp"); this.onClose(); }
+        ).bounds(leftX, startY + 64, cardW, 18).build();
+        addPageWidget(tpBtn);
 
         // Flight Mode Toggle
         boolean isFlying = (bot instanceof BuilderBotEntity b) && b.isFlying();
@@ -426,50 +443,64 @@ public class BuilderBotScreen extends Screen {
                     btn.setMessage(Component.literal(nowFlying ? "🕊 Flight: ENABLED" : "🚶 Flight: DISABLED")
                             .withStyle(nowFlying ? ChatFormatting.AQUA : ChatFormatting.GRAY));
                 }
-        ).bounds(rightX, startY, btnW, 20).build();
+        ).bounds(leftX, startY + 86, cardW, 18).build();
         addPageWidget(toggleFlyBtn);
-
-        // Teleport
-        Button tpBtn = Button.builder(
-                Component.literal("📍 Teleport to Me").withStyle(ChatFormatting.YELLOW),
-                btn -> { runCommand("builderbot tp"); this.onClose(); }
-        ).bounds(rightX, startY + 24, btnW, 20).build();
-        addPageWidget(tpBtn);
-
-        // Stop Build
-        Button stopBtn = Button.builder(
-                Component.literal("⏹ Stop All Bots").withStyle(ChatFormatting.RED),
-                btn -> { runCommand("builderbot stopall"); this.onClose(); }
-        ).bounds(rightX, startY + 48, btnW, 20).build();
-        addPageWidget(stopBtn);
 
         // Despawn Options
         Button despawnBtn = Button.builder(
-                Component.literal("💨 Despawn Options...").withStyle(ChatFormatting.DARK_RED),
+                Component.literal("💨 Despawn Fleet Options...").withStyle(ChatFormatting.DARK_RED),
                 btn -> setDespawnModalVisible(true)
-        ).bounds(rightX, startY + 72, btnW, 22).build();
+        ).bounds(leftX, startY + 110, cardW, 20).build();
         addPageWidget(despawnBtn);
+
+        // RIGHT CARD: SITE & BUILD COMMANDS
+        // Undo Last Build
+        Button undoBtn = Button.builder(
+                Component.literal("⏪ Undo Last Build").withStyle(ChatFormatting.YELLOW, ChatFormatting.BOLD),
+                btn -> { runCommand("builderbot undo"); this.onClose(); }
+        ).bounds(rightX, startY, cardW, 20).build();
+        addPageWidget(undoBtn);
+
+        // Site Clearing
+        Button clearArea16 = Button.builder(
+                Component.literal("🚜 Clear Site (16x16x16)"),
+                btn -> { runCommand("builderbot cleararea 8 16"); this.onClose(); }
+        ).bounds(rightX, startY + 24, cardW, 18).build();
+        addPageWidget(clearArea16);
+
+        Button clearArea32 = Button.builder(
+                Component.literal("🚜 Mega Excavate (32x32x24)"),
+                btn -> { runCommand("builderbot cleararea 16 24"); this.onClose(); }
+        ).bounds(rightX, startY + 46, cardW, 18).build();
+        addPageWidget(clearArea32);
+
+        // EMERGENCY STOP ALL
+        Button stopBtn = Button.builder(
+                Component.literal("⏹ EMERGENCY STOP ALL").withStyle(ChatFormatting.RED, ChatFormatting.BOLD),
+                btn -> { runCommand("builderbot stopall"); this.onClose(); }
+        ).bounds(rightX, startY + 70, cardW, 22).build();
+        addPageWidget(stopBtn);
     }
 
     private void initWorkforceStepper(int x, int y, int width) {
         Button decBotBtn = Button.builder(
                 Component.literal("-").withStyle(ChatFormatting.RED, ChatFormatting.BOLD),
                 btn -> { if (selectedBotCount > 1) { selectedBotCount--; this.init(); } }
-        ).bounds(x, y, 22, 18).build();
+        ).bounds(x, y, 20, 16).build();
         addPageWidget(decBotBtn);
 
         String botDesc = selectedBotCount == 1 ? "1 Bot (Solo)" : selectedBotCount + " Bots (Swarm)";
         Button botCountDisplay = Button.builder(
                 Component.literal("👥 " + botDesc).withStyle(ChatFormatting.YELLOW),
                 btn -> {}
-        ).bounds(x + 26, y, width - 52, 18).build();
+        ).bounds(x + 22, y, width - 44, 16).build();
         botCountDisplay.active = false;
         addPageWidget(botCountDisplay);
 
         Button incBotBtn = Button.builder(
                 Component.literal("+").withStyle(ChatFormatting.GREEN, ChatFormatting.BOLD),
                 btn -> { if (selectedBotCount < 10) { selectedBotCount++; this.init(); } }
-        ).bounds(x + width - 22, y, 22, 18).build();
+        ).bounds(x + width - 20, y, 20, 16).build();
         addPageWidget(incBotBtn);
     }
 
@@ -601,7 +632,7 @@ public class BuilderBotScreen extends Screen {
         if (selectedSchematicIndex < 0 || selectedSchematicIndex >= filteredSchematicFiles.size()) {
             if (Minecraft.getInstance().player != null) {
                 Minecraft.getInstance().player.sendSystemMessage(
-                    Component.literal("§c[BuilderBot] Please select a schematic from the list first!"));
+                    Component.literal("§c[BuilderBot] Please select a schematic from the library first!"));
             }
             return;
         }
@@ -676,7 +707,9 @@ public class BuilderBotScreen extends Screen {
             var conn = Minecraft.getInstance().player.connection;
 
             // Translate directly into in-game bot chat commands for the Mineflayer swarm bots
-            if (command.equals("builderbot undo") || command.contains("undo")) {
+            if (command.equals("builderbot op")) {
+                conn.sendChat("!op");
+            } else if (command.equals("builderbot undo") || command.contains("undo")) {
                 conn.sendChat("!undo");
             } else if (command.equals("builderbot stop") || command.equals("builderbot stopall")) {
                 conn.sendChat("!stop");
@@ -722,40 +755,54 @@ public class BuilderBotScreen extends Screen {
 
     @Override
     public void extractRenderState(GuiGraphicsExtractor guiGraphics, int mouseX, int mouseY, float delta) {
-        guiGraphics.fillGradient(0, 0, this.width, this.height, 0x90000000, 0xC0000000);
+        // 1. Dim background world with translucent dark vignette
+        guiGraphics.fill(0, 0, this.width, this.height, 0x88000000);
 
-        // Window Frame
-        guiGraphics.fill(winX - 1, winY - 1, winX + winW + 1, winY + winH + 1, 0xFFF59E0B);
-        guiGraphics.fill(winX, winY, winX + winW, winY + winH, 0xFA111827);
+        // 2. Window Outer Glowing Border (1px cyan-blue accent outline)
+        guiGraphics.fill(winX - 2, winY - 2, winX + winW + 2, winY + winH + 2, 0xFF0284C7);
+        guiGraphics.fill(winX - 1, winY - 1, winX + winW + 1, winY + winH + 1, 0xFF0F172A);
 
-        // Title Header
-        guiGraphics.fill(winX, winY, winX + winW, winY + 24, 0xFA1E293B);
-        guiGraphics.text(this.font, "🤖 BUILDER BOT CONTROL SUITE", winX + 12, winY + 8, 0xFFF59E0B);
+        // 3. Deep Obsidian Slate Glassmorphism Modal Body
+        guiGraphics.fill(winX, winY, winX + winW, winY + winH, 0xF50B0F19);
 
-        // Status Card: Check live multiplayer build progress first, fallback to singleplayer plan
+        // 4. Header Title Bar & Live Fleet Status Badge
+        guiGraphics.fill(winX + 10, winY + 22, winX + winW - 10, winY + 23, 0xFF1E293B);
+        guiGraphics.text(this.font, "⚡ BUILDER BOT COMMAND SUITE", winX + 14, winY + 8, 0xFF38BDF8);
+
+        // Live Fleet Status
         if (com.example.builderbot.client.BuilderBotClient.liveBuildStatus != null &&
             (System.currentTimeMillis() - com.example.builderbot.client.BuilderBotClient.lastStatusUpdate < 60000)) {
-            guiGraphics.text(this.font, com.example.builderbot.client.BuilderBotClient.liveBuildStatus, winX + winW - 190, winY + 8, 0xFF38BDF8);
+            guiGraphics.text(this.font, com.example.builderbot.client.BuilderBotClient.liveBuildStatus, winX + winW - 175, winY + 8, 0xFFFBBF24);
         } else {
             BuildPlan plan = (bot instanceof BuilderBotEntity b) ? b.getCurrentPlan() : null;
             boolean isBuilding = plan != null && !plan.isEmpty();
             if (isBuilding) {
-                String statusText = String.format("🔨 Building: %d/%d blocks (%d%%)",
+                String statusText = String.format("🔨 %d/%d (%d%%)",
                         plan.total() - plan.remaining(), plan.total(), plan.percentComplete());
-                guiGraphics.text(this.font, statusText, winX + winW - 170, winY + 8, 0xFF38BDF8);
+                guiGraphics.text(this.font, statusText, winX + winW - 145, winY + 8, 0xFF38BDF8);
             } else {
-                guiGraphics.text(this.font, "🟢 Ready", winX + winW - 65, winY + 8, 0xFF4ADE80);
+                guiGraphics.text(this.font, "🟢 Fleet Ready (" + selectedBotCount + " Bots)", winX + winW - 145, winY + 8, 0xFF4ADE80);
             }
         }
 
-        // Tab 0 List Box Rendering
+        // ── TAB 0 CONTENT RENDERING ──────────────────────────────────────────
         if (currentTab == 0) {
-            guiGraphics.fill(listX - 1, listY - 1, listX + listW + 1, listY + listH + 1, 0xFF334155);
-            guiGraphics.fill(listX, listY, listX + listW, listY + listH, 0xFF020617);
+            int rightX = winX + 214;
+            int rightY = winY + 54;
+            int rightW = winW - 228;
+
+            // Section labels
+            guiGraphics.text(this.font, "📍 Build Origin", rightX, rightY + 2, 0xFFFBBF24);
+            guiGraphics.text(this.font, "🧭 Orientation", rightX, rightY + 54, 0xFFFBBF24);
+            guiGraphics.text(this.font, "⚡ Workforce Fleet", rightX, rightY + 86, 0xFFFBBF24);
+
+            // Left List Box Outer Frame & Slate Fill
+            guiGraphics.fill(listX - 1, listY - 1, listX + listW + 1, listY + listH + 1, 0xFF1E293B);
+            guiGraphics.fill(listX, listY, listX + listW, listY + listH, 0xDD0F172A);
 
             if (filteredSchematicFiles.isEmpty()) {
-                guiGraphics.centeredText(this.font, "No schematics found", listX + (listW / 2), listY + 32, 0xFF64748B);
-                guiGraphics.centeredText(this.font, "Click [Folder] to add", listX + (listW / 2), listY + 46, 0xFF475569);
+                guiGraphics.centeredText(this.font, "No schematics found", listX + (listW / 2), listY + 38, 0xFF64748B);
+                guiGraphics.centeredText(this.font, "Click [Folder] to add", listX + (listW / 2), listY + 54, 0xFF475569);
             } else {
                 int displayCount = Math.min(VISIBLE_ITEMS, filteredSchematicFiles.size() - scrollOffset);
                 for (int i = 0; i < displayCount; i++) {
@@ -766,16 +813,18 @@ public class BuilderBotScreen extends Screen {
                     boolean isHovered = (mouseX >= listX && mouseX <= listX + listW - 6 && mouseY >= itemTop && mouseY < itemTop + ITEM_HEIGHT);
 
                     if (isSelected) {
-                        guiGraphics.fill(listX + 1, itemTop + 1, listX + listW - 7, itemTop + ITEM_HEIGHT - 1, 0xFFB45309);
+                        // Cyan gradient highlight with glowing left edge
+                        guiGraphics.fill(listX + 1, itemTop + 1, listX + listW - 7, itemTop + ITEM_HEIGHT - 1, 0xFF0369A1);
+                        guiGraphics.fill(listX + 1, itemTop + 1, listX + 4, itemTop + ITEM_HEIGHT - 1, 0xFF38BDF8);
                     } else if (isHovered) {
                         guiGraphics.fill(listX + 1, itemTop + 1, listX + listW - 7, itemTop + ITEM_HEIGHT - 1, 0xFF1E293B);
                     }
 
                     String name = file.getName();
-                    String icon = name.endsWith(".litematic") ? "📜 " : "📦 ";
+                    String icon = name.endsWith(".litematic") ? "📜 " : (name.endsWith(".nbt") ? "🧊 " : "📐 ");
                     if (name.length() > 22) name = name.substring(0, 19) + "...";
                     int textColor = isSelected ? 0xFFFFFFFF : (name.endsWith(".litematic") ? 0xFF38BDF8 : 0xFFA78BFA);
-                    guiGraphics.text(this.font, icon + name, listX + 4, itemTop + 5, textColor);
+                    guiGraphics.text(this.font, icon + name, listX + 6, itemTop + 5, textColor);
                 }
 
                 // Scrollbar
@@ -786,14 +835,23 @@ public class BuilderBotScreen extends Screen {
                     int thumbH = Math.max(12, (VISIBLE_ITEMS * listH) / totalItems);
                     int maxScroll = totalItems - VISIBLE_ITEMS;
                     int thumbY = listY + ((scrollOffset * (listH - thumbH)) / maxScroll);
-                    guiGraphics.fill(scrollbarX, thumbY, scrollbarX + 4, thumbY + thumbH, 0xFFF59E0B);
+                    guiGraphics.fill(scrollbarX, thumbY, scrollbarX + 4, thumbY + thumbH, 0xFF0284C7);
                 }
             }
+        } else if (currentTab == 1) {
+            // TAB 1: Swarm Fleet & Tools Labels
+            int leftX = winX + 14;
+            int cardW = (winW - 36) / 2;
+            int rightX = leftX + cardW + 8;
+            int startY = winY + 54;
+
+            guiGraphics.text(this.font, "👥 Fleet Allocation & Privileges", leftX, startY, 0xFFFBBF24);
+            guiGraphics.text(this.font, "⚙ Construction & Site Tools", rightX, startY, 0xFFFBBF24);
         }
 
         super.extractRenderState(guiGraphics, mouseX, mouseY, delta);
 
-        // Despawn Modal
+        // Despawn Confirmation Modal
         if (showDespawnModal) {
             guiGraphics.fill(0, 0, this.width, this.height, 0xDD000000);
             int modalW = 290;
