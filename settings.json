@@ -18,8 +18,8 @@
       "password": "chalol78"
     },
     "auto-reconnect": true,
-    "auto-reconnect-delay": 5000,
-    "max-reconnect-delay": 30000,
+    "auto-reconnect-delay": 10000,
+    "max-reconnect-delay": 60000,
     "chat-log": true
   },
   "builder": {

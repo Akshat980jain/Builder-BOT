@@ -7,6 +7,7 @@ class SafetyManager {
     this.bot = bot;
     this.config = config || {};
     this.isPluggingLava = false;
+    this.flightInterval = null;
   }
 
   /**
@@ -18,12 +19,23 @@ class SafetyManager {
     });
 
     if (this.config.safety?.flightProtection) {
-      setInterval(() => {
+      if (this.flightInterval) clearInterval(this.flightInterval);
+      this.flightInterval = setInterval(() => {
         this.maintainCreativeFlight();
       }, 3000);
     }
 
     addLog("Safety systems activated (Health monitor, Creative flight guard, Lava defense)", "Safety");
+  }
+
+  /**
+   * Cleans up running intervals when bot disconnects
+   */
+  destroy() {
+    if (this.flightInterval) {
+      clearInterval(this.flightInterval);
+      this.flightInterval = null;
+    }
   }
 
   /**
@@ -40,7 +52,9 @@ class SafetyManager {
    */
   maintainCreativeFlight() {
     if (!this.bot || !this.bot.entity) return;
-    if (this.bot.game?.gameMode === "creative" || this.bot.creative) {
+    // CRITICAL: Only fly if server confirms creative mode (gameMode === "creative").
+    // Do NOT check || this.bot.creative because Mineflayer's creative plugin object exists even in survival!
+    if (this.bot.game && this.bot.game.gameMode === "creative") {
       if (this.bot.creative && typeof this.bot.creative.startFlying === "function") {
         try {
           this.bot.creative.startFlying();

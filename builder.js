@@ -225,9 +225,9 @@ class BuilderManager {
       this.bot.chat(`[Builder] Starting "${name}" (${worldBlocks.length} blocks) at (${origin.x}, ${origin.y}, ${origin.z})`);
     } catch (_) {}
 
-    // Ensure creative mode & flight if possible
-    if (this.bot && typeof this.bot.chat === "function") {
-      try { this.bot.chat(`/gamemode creative ${this.bot.username}`); } catch (_) {}
+    // Attempt creative mode if not already in creative (only works if bot has OP)
+    if (this.bot && typeof this.bot.chat === "function" && this.bot.game?.gameMode !== "creative") {
+      try { this.bot.chat("/gamemode creative"); } catch (_) {}
     }
     await sleep(200);
     if (this.safety) this.safety.maintainCreativeFlight();
@@ -303,7 +303,7 @@ class BuilderManager {
       }
 
       // Dynamic delay
-      const isCreative = this.bot.game?.gameMode === "creative" || this.bot.creative;
+      const isCreative = this.bot.game?.gameMode === "creative";
       const delay = isCreative ? this.creativeDelayMs : this.placeDelayMs;
       if (delay > 0) await sleep(delay);
     }
@@ -344,7 +344,7 @@ class BuilderManager {
       let item = bot.inventory.items().find((i) => i.name === itemName || i.name === cleanName);
 
       // Step B: Creative Slot Provisioning (Slot 36 / hotbar)
-      if (!item && (bot.game?.gameMode === "creative" || bot.creative)) {
+      if (!item && this.bot.game?.gameMode === "creative") {
         try {
           const itemEntry = mcData.itemsByName[itemName] || mcData.blocksByName[cleanName];
           if (itemEntry && typeof bot.creative?.setInventorySlot === "function") {
@@ -456,10 +456,15 @@ class BuilderManager {
 
     if (isColliding) {
       const away = p.clone().offset(0, 1.2, 1.2);
-      if (this.bot.creative && typeof this.bot.creative.flyTo === "function") {
+      if (this.bot.game?.gameMode === "creative" && this.bot.creative && typeof this.bot.creative.flyTo === "function") {
         try { await this.bot.creative.flyTo(away); } catch (_) {}
       } else {
-        try { this.bot.chat(`/tp ${this.bot.username} ${away.x.toFixed(1)} ${away.y.toFixed(1)} ${away.z.toFixed(1)}`); } catch (_) {}
+        try {
+          this.bot.setControlState("back", true);
+          setTimeout(() => {
+            try { this.bot.setControlState("back", false); } catch (_) {}
+          }, 200);
+        } catch (_) {}
       }
       await sleep(50);
     }

@@ -159,7 +159,8 @@ class SwarmManager {
           port: this.serverConfig.port,
           username,
           version: this.serverConfig.version || "1.21.4",
-          checkTimeoutInterval: 45000
+          checkTimeoutInterval: 120000,
+          hideErrors: true
         });
       } catch (err) {
         this.addLog(`[Swarm] Failed creating Bot #${id}: ${err.message}`, "Swarm");
@@ -174,6 +175,9 @@ class SwarmManager {
       entry.safety = safety;
       entry.builder = builder;
 
+      let authHandled = false;
+      let authTimeout = null;
+
       workerBot.once("spawn", () => {
         entry.connected = true;
         entry.connecting = false;
@@ -182,18 +186,47 @@ class SwarmManager {
 
         this.addLog(`[Swarm] 🟢 Bot #${id} (${username}) spawned and ready!`, "Swarm");
 
-        // Auto-auth
-        setTimeout(() => {
-          try {
-            workerBot.chat(`/register ${this.authPassword} ${this.authPassword}`);
-            workerBot.chat(`/login ${this.authPassword}`);
-            if (this.serverConfig.tryCreative) {
-              workerBot.chat(`/gamemode creative ${username}`);
+        // Failsafe auto-auth if no prompt received
+        authTimeout = setTimeout(() => {
+          if (!authHandled && workerBot) {
+            authHandled = true;
+            try { workerBot.chat(`/login ${this.authPassword}`); } catch (_) {}
+          }
+        }, 3500);
+
+        // Delayed gamemode attempt
+        if (this.serverConfig.tryCreative) {
+          setTimeout(() => {
+            if (workerBot && workerBot.game?.gameMode !== "creative") {
+              try { workerBot.chat("/gamemode creative"); } catch (_) {}
             }
-          } catch (_) {}
-        }, 1500);
+          }, 5000);
+        }
 
         resolve(true);
+      });
+
+      // Reactive auth listener
+      workerBot.on("messagestr", (message) => {
+        if (authHandled) return;
+        const msg = message.toLowerCase();
+        if (msg.includes("/register") || msg.includes("register ")) {
+          authHandled = true;
+          if (authTimeout) clearTimeout(authTimeout);
+          try { workerBot.chat(`/register ${this.authPassword} ${this.authPassword}`); } catch (_) {}
+        } else if (msg.includes("/login") || msg.includes("login ")) {
+          authHandled = true;
+          if (authTimeout) clearTimeout(authTimeout);
+          try { workerBot.chat(`/login ${this.authPassword}`); } catch (_) {}
+        }
+      });
+
+      workerBot.on("kicked", (reason) => {
+        let kickReason = reason;
+        try {
+          if (typeof reason === "object") kickReason = JSON.stringify(reason);
+        } catch (_) {}
+        this.addLog(`[Swarm] ⚠️ Bot #${id} kicked: ${kickReason}`, "Swarm");
       });
 
       workerBot.on("error", (err) => {
@@ -203,11 +236,12 @@ class SwarmManager {
       workerBot.on("end", (reason) => {
         entry.connected = false;
         entry.connecting = false;
+        if (safety) safety.destroy();
         this.addLog(`[Swarm] Bot #${id} disconnected: ${reason}`, "Swarm");
 
         if (this.isSupervisorRunning && id <= this.targetBots) {
           entry.reconnectAttempts++;
-          const delay = Math.min(5000 * Math.pow(1.3, entry.reconnectAttempts), 30000);
+          const delay = Math.min(10000 * Math.pow(1.25, entry.reconnectAttempts), 60000);
           this.enqueueReconnect(id, delay);
         }
       });

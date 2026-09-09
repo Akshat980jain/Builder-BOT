@@ -36,7 +36,8 @@ const botState = {
   currentAction: "Idle",
   coords: { x: 0, y: 64, z: 0 },
   health: 20,
-  food: 20
+  food: 20,
+  wasThrottled: false
 };
 
 const SCHEMATICS_DIR = path.join(__dirname, "schematics");
@@ -1156,7 +1157,7 @@ async function handleChatCommands(sender, message) {
     }
 
     case "fly": {
-      if (bot.creative && typeof bot.creative.startFlying === "function") {
+      if (bot.game?.gameMode === "creative" && bot.creative && typeof bot.creative.startFlying === "function") {
         try {
           bot.creative.startFlying();
           bot.chat("[Flight] Creative flight enabled.");
@@ -1232,7 +1233,8 @@ function createBuilderBot() {
       port: serverConfig.port,
       username,
       version: serverConfig.version || "1.21.4",
-      checkTimeoutInterval: 60000
+      checkTimeoutInterval: 120000,
+      hideErrors: true
     });
   } catch (err) {
     addLog(`[Error] Failed to initialize Mineflayer bot: ${err.message}`, "General");
@@ -1247,6 +1249,9 @@ function createBuilderBot() {
     swarm = new SwarmManager(serverConfig, addLog, () => {});
   }
 
+  let authHandled = false;
+  let authTimeout = null;
+
   bot.once("spawn", () => {
     botState.connected = true;
     botState.reconnectAttempts = 0;
@@ -1260,24 +1265,60 @@ function createBuilderBot() {
     // Register with swarm supervisor
     swarm.registerPrimaryBot(bot, builder, safety);
 
-    // Auto-auth
+    // Auto-auth failsafe: if no server prompt detected after 3.5s, send /login then /register fallback
     const authConfig = config.utils?.["auto-auth"];
     if (authConfig && authConfig.enabled) {
-      setTimeout(() => {
-        try {
-          bot.chat(`/register ${authConfig.password} ${authConfig.password}`);
-          bot.chat(`/login ${authConfig.password}`);
-        } catch (_) {}
-      }, 1500);
+      authTimeout = setTimeout(() => {
+        if (!authHandled && bot && botState.connected) {
+          authHandled = true;
+          addLog("[Auth] No server prompt detected after 3.5s, sending /login failsafe...", "General");
+          try { bot.chat(`/login ${authConfig.password}`); } catch (_) {}
+          setTimeout(() => {
+            if (bot && botState.connected) {
+              try { bot.chat(`/register ${authConfig.password} ${authConfig.password}`); } catch (_) {}
+            }
+          }, 2000);
+        }
+      }, 3500);
     }
 
-    // Creative mode setup
+    // Creative mode setup: delayed attempt after authentication has completed
     if (serverConfig.tryCreative) {
       setTimeout(() => {
-        try {
-          bot.chat(`/gamemode creative ${username}`);
-        } catch (_) {}
-      }, 2500);
+        if (bot && botState.connected && bot.game?.gameMode !== "creative") {
+          try {
+            bot.chat("/gamemode creative");
+            addLog("[Gamemode] Attempted /gamemode creative (requires OP)", "General");
+          } catch (_) {}
+        }
+      }, 5000);
+    }
+  });
+
+  // Reactive auth on server message strings
+  bot.on("messagestr", (message) => {
+    const authConfig = config.utils?.["auto-auth"];
+    if (authConfig && authConfig.enabled && !authHandled) {
+      const msg = message.toLowerCase();
+      if (msg.includes("/register") || msg.includes("register ") || msg.includes("비밀번호")) {
+        authHandled = true;
+        if (authTimeout) clearTimeout(authTimeout);
+        addLog("[Auth] Detected register prompt - sending /register", "General");
+        try { bot.chat(`/register ${authConfig.password} ${authConfig.password}`); } catch (_) {}
+      } else if (msg.includes("/login") || msg.includes("login ") || msg.includes("로그인")) {
+        authHandled = true;
+        if (authTimeout) clearTimeout(authTimeout);
+        addLog("[Auth] Detected login prompt - sending /login", "General");
+        try { bot.chat(`/login ${authConfig.password}`); } catch (_) {}
+      }
+    }
+
+    if (
+      message.includes("commands.gamemode.success.self") ||
+      message.includes("Set own game mode to Creative Mode") ||
+      message.includes("game mode has been updated")
+    ) {
+      addLog("👑 Bot confirmed in Creative Mode.", "General");
     }
   });
 
@@ -1297,12 +1338,38 @@ function createBuilderBot() {
     }
   });
 
+  bot.on("kicked", (reason) => {
+    let kickReason = reason;
+    try {
+      if (typeof reason === "object") kickReason = JSON.stringify(reason);
+    } catch (_) {}
+    addLog(`⚠️ [Kicked] Bot was kicked by server: ${kickReason}`, "General");
+    console.error(`[General] ⚠️ Bot was kicked: ${kickReason}`);
+
+    const rLower = String(kickReason).toLowerCase();
+    if (
+      rLower.includes("throttl") ||
+      rLower.includes("wait") ||
+      rLower.includes("too fast") ||
+      rLower.includes("reconnect") ||
+      rLower.includes("flying") ||
+      rLower.includes("econnreset")
+    ) {
+      botState.wasThrottled = true;
+    }
+  });
+
   bot.on("error", (err) => {
-    addLog(`[Bot Error] ${err.message}`, "General");
+    const msg = err.message || String(err);
+    addLog(`[Bot Error] ${msg}`, "General");
+    if (msg.includes("ECONNRESET") || msg.includes("ETIMEDOUT") || msg.includes("EPIPE")) {
+      botState.wasThrottled = true;
+    }
   });
 
   bot.on("end", (reason) => {
     botState.connected = false;
+    if (safety) safety.destroy();
     addLog(`🔴 Bot disconnected from server: ${reason}`, "General");
     scheduleReconnect();
   });
@@ -1313,9 +1380,14 @@ function scheduleReconnect() {
   isReconnecting = true;
 
   botState.reconnectAttempts++;
-  const base = config.utils?.["auto-reconnect-delay"] || 5000;
-  const max = config.utils?.["max-reconnect-delay"] || 30000;
-  const delay = Math.min(base * Math.pow(1.3, botState.reconnectAttempts), max);
+  const base = config.utils?.["auto-reconnect-delay"] || 10000;
+  const max = config.utils?.["max-reconnect-delay"] || 60000;
+  let delay = Math.min(base * Math.pow(1.25, botState.reconnectAttempts - 1), max);
+
+  if (botState.wasThrottled) {
+    delay = Math.max(delay, 15000);
+    botState.wasThrottled = false;
+  }
 
   addLog(`Reconnecting in ${(delay / 1000).toFixed(1)}s (Attempt #${botState.reconnectAttempts})...`, "General");
 
@@ -1327,7 +1399,11 @@ function scheduleReconnect() {
 }
 
 process.on("uncaughtException", (err) => {
-  addLog(`[Handled Error] ${err.message}`, "General");
+  const msg = err.message || String(err);
+  addLog(`[Handled Error] ${msg}`, "General");
+  if (msg.includes("ECONNRESET") || msg.includes("ETIMEDOUT") || msg.includes("EPIPE") || msg.includes("PartialReadError")) {
+    botState.wasThrottled = true;
+  }
   if (!bot || !botState.connected) {
     if (!isReconnecting) scheduleReconnect();
   }
