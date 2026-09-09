@@ -1093,60 +1093,53 @@ async function handleChatCommands(sender, message) {
 
       const files = listSchematicFiles();
 
-      // Smart parser: scan from the END of parts for optional rotation (single number)
-      // then coordinates (3 numbers), then treat everything before as the schematic name.
-      // This handles schematic names with spaces correctly.
-      let coordParts = [];
+      let rawArgs = parts.join(" ").trim();
+      let coordParts = null;
       let rotation = 0;
-      let remaining = [...parts];
 
-      // Check if last token could be rotation (single number: 0, 90, 180, 270)
-      if (remaining.length >= 1) {
-        const maybeRot = parseInt(remaining[remaining.length - 1], 10);
-        if (!isNaN(maybeRot) && [0, 90, 180, 270].includes(maybeRot) && remaining.length > 1) {
-          // Check if the 4 tokens before are a valid coordinate triplet
-          const maybeZ = parseInt(remaining[remaining.length - 2], 10);
-          const maybeY = parseInt(remaining[remaining.length - 3], 10);
-          const maybeX = parseInt(remaining[remaining.length - 4], 10);
-          if (!isNaN(maybeX) && !isNaN(maybeY) && !isNaN(maybeZ) && remaining.length >= 4) {
-            rotation = maybeRot;
-            coordParts = [maybeX, maybeY, maybeZ];
-            remaining = remaining.slice(0, remaining.length - 4);
-          }
-        }
+      // Regex 1: Matches trailing '<x> <y> <z> <rot>' where rot is 0|90|180|270
+      const rotCoordsRegex = /\s+(-?\d+)\s+(-?\d+)\s+(-?\d+)\s+(0|90|180|270)\s*$/;
+      // Regex 2: Matches trailing '<x> <y> <z>'
+      const coordsOnlyRegex = /\s+(-?\d+)\s+(-?\d+)\s+(-?\d+)\s*$/;
+      // Regex 3: Matches trailing rotation only '<rot>'
+      const rotOnlyRegex = /\s+(0|90|180|270)\s*$/;
+
+      let m = rawArgs.match(rotCoordsRegex);
+      if (m) {
+        coordParts = [parseInt(m[1], 10), parseInt(m[2], 10), parseInt(m[3], 10)];
+        rotation = parseInt(m[4], 10);
+        rawArgs = rawArgs.substring(0, m.index).trim();
+      } else if ((m = rawArgs.match(coordsOnlyRegex))) {
+        coordParts = [parseInt(m[1], 10), parseInt(m[2], 10), parseInt(m[3], 10)];
+        rotation = 0;
+        rawArgs = rawArgs.substring(0, m.index).trim();
+      } else if ((m = rawArgs.match(rotOnlyRegex))) {
+        rotation = parseInt(m[1], 10);
+        rawArgs = rawArgs.substring(0, m.index).trim();
       }
 
-      // If rotation wasn't found above, check if last 3 tokens are coordinates
-      if (coordParts.length === 0 && remaining.length >= 3) {
-        const maybeX = parseInt(remaining[remaining.length - 3], 10);
-        const maybeY = parseInt(remaining[remaining.length - 2], 10);
-        const maybeZ = parseInt(remaining[remaining.length - 1], 10);
-        if (!isNaN(maybeX) && !isNaN(maybeY) && !isNaN(maybeZ)) {
-          coordParts = [maybeX, maybeY, maybeZ];
-          remaining = remaining.slice(0, remaining.length - 3);
-        }
-      }
-
-      // remaining now contains only the schematic name (possibly multi-word)
-      const query = remaining.join(" ").trim();
+      const query = rawArgs.trim();
       if (!query) {
         bot.chat("Usage: !schematic <number|name> [x y z] [rot 0|90|180|270]");
         return;
       }
 
-      // Match by index number first, then by partial name
+      // Match by index number first (ONLY if query is strictly pure digits), then by filename
       let matchedFile = null;
-      const num = parseInt(query, 10);
-      if (!isNaN(num) && num >= 1 && num <= files.length) {
-        matchedFile = files[num - 1];
-      } else {
-        // Fuzzy match: try full match, then word-by-word
-        matchedFile = files.find((f) => f.toLowerCase().replace(/\.(litematic|nbt|schematic|schem)$/i, "") === query.toLowerCase());
+      if (/^\d+$/.test(query)) {
+        const num = parseInt(query, 10);
+        if (num >= 1 && num <= files.length) {
+          matchedFile = files[num - 1];
+        }
+      }
+
+      if (!matchedFile) {
+        // Full match (with or without extension)
+        matchedFile = files.find((f) => f.toLowerCase() === query.toLowerCase() || f.toLowerCase().replace(/\.(litematic|nbt|schematic|schem)$/i, "") === query.toLowerCase());
         if (!matchedFile) {
           matchedFile = files.find((f) => f.toLowerCase().includes(query.toLowerCase()));
         }
         if (!matchedFile) {
-          // Match by first word of query (for partial names)
           const firstWord = query.split(/\s+/)[0].toLowerCase();
           matchedFile = files.find((f) => f.toLowerCase().includes(firstWord));
         }
@@ -1159,10 +1152,11 @@ async function handleChatCommands(sender, message) {
 
       // Build origin from parsed coordinates or default to bot's position
       let origin;
-      if (coordParts.length === 3) {
+      if (coordParts && coordParts.length === 3) {
         origin = new Vec3(coordParts[0], coordParts[1], coordParts[2]);
       } else {
         origin = bot.entity ? bot.entity.position.floored() : new Vec3(0, 64, 0);
+        bot.chat(`[Builder] ⚠️ No target coordinates supplied — building at bot position (${origin.x}, ${origin.y}, ${origin.z})`);
       }
 
       // Validate origin — NaN coordinates crash the builder
@@ -1557,7 +1551,21 @@ function createBuilderBot() {
   bot.on("message", (jsonMsg) => {
     const text = jsonMsg.toString().trim();
     if (!text) return;
-    if (text.startsWith("!")) handleChatCommands("System", text);
+    const cmdIndex = text.indexOf("!");
+    if (cmdIndex !== -1) {
+      const potentialCmd = text.substring(cmdIndex).trim();
+      const firstWord = potentialCmd.slice(1).split(/\s+/)[0].toLowerCase();
+      const validCmds = ["schematic", "schematics", "build", "list", "stop", "stopall", "cancel", "pause", "resume", "undo", "come", "tp", "fly", "despawn", "despawnall", "cleararea", "status"];
+      if (validCmds.includes(firstWord)) {
+        let sender = "ChatUser";
+        const prefix = text.substring(0, cmdIndex);
+        const nameMatch = prefix.match(/<([^>]+)>|([a-zA-Z0-9_]{3,16})\s*[:»]/);
+        if (nameMatch) sender = nameMatch[1] || nameMatch[2];
+        if (sender !== bot.username) {
+          handleChatCommands(sender, potentialCmd);
+        }
+      }
+    }
   });
 
   // ── KICKED ─────────────────────────────────────────────────────────────

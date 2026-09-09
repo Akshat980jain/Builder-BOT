@@ -258,6 +258,11 @@ class BuilderManager {
           this.bot.chat(`/tp ${this.bot.username} ${origin.x} ${origin.y + 2} ${origin.z}`);
         } catch (_) {}
       }
+      if (this.bot.creative && typeof this.bot.creative.flyTo === "function") {
+        try {
+          await this.bot.creative.flyTo(origin.offset(0, 2, 0));
+        } catch (_) {}
+      }
       await sleep(1500); // Allow chunks around the bot to load
     }
 

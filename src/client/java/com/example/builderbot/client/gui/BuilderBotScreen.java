@@ -559,27 +559,18 @@ public class BuilderBotScreen extends Screen {
         if (searchBox != null) searchBox.setEditable(!visible);
     }
 
-    private static boolean isPlayerOnline(String username) {
-        var conn = Minecraft.getInstance().getConnection();
-        if (conn == null) return false;
-        for (var info : conn.getOnlinePlayers()) {
-            if (info != null && info.getProfile() != null && username.equalsIgnoreCase(info.getProfile().name())) {
-                return true;
-            }
-        }
-        return false;
+    private static boolean isBotPlayer(String playerName) {
+        if (playerName == null) return false;
+        String clean = playerName.replace("_", "").toLowerCase();
+        return clean.startsWith("builderbot");
     }
 
     public static void ensureBotsInCreative() {
         var conn = Minecraft.getInstance().getConnection();
-        if (conn != null) {
-            if (isPlayerOnline("BuilderBot")) {
-                conn.sendCommand("gamemode creative BuilderBot");
-            }
-            for (int i = 2; i <= 10; i++) {
-                String botName = "BuilderBot_" + i;
-                if (isPlayerOnline(botName)) {
-                    conn.sendCommand("gamemode creative " + botName);
+        if (conn != null && conn.getOnlinePlayers() != null) {
+            for (var info : conn.getOnlinePlayers()) {
+                if (info != null && info.getProfile() != null && isBotPlayer(info.getProfile().name())) {
+                    conn.sendCommand("gamemode creative " + info.getProfile().name());
                 }
             }
         }
@@ -587,18 +578,13 @@ public class BuilderBotScreen extends Screen {
 
     private void sendOpPrepCommands(BlockPos origin) {
         var conn = Minecraft.getInstance().getConnection();
-        if (conn != null) {
-            // Ensure only currently connected swarm bots are placed into creative mode
+        if (conn != null && conn.getOnlinePlayers() != null) {
             ensureBotsInCreative();
 
-            // Pre-teleport currently connected fleet to the exact chosen build origin
             if (origin != null) {
-                if (isPlayerOnline("BuilderBot")) {
-                    conn.sendCommand("tp BuilderBot " + origin.getX() + " " + (origin.getY() + 1) + " " + origin.getZ());
-                }
-                for (int i = 2; i <= selectedBotCount; i++) {
-                    String botName = "BuilderBot_" + i;
-                    if (isPlayerOnline(botName)) {
+                for (var info : conn.getOnlinePlayers()) {
+                    if (info != null && info.getProfile() != null && isBotPlayer(info.getProfile().name())) {
+                        String botName = info.getProfile().name();
                         conn.sendCommand("tp " + botName + " " + origin.getX() + " " + (origin.getY() + 1) + " " + origin.getZ());
                     }
                 }
