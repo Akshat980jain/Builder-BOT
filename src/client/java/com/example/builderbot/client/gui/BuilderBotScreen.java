@@ -374,17 +374,6 @@ public class BuilderBotScreen extends Screen {
                 return new BlockPos(x, y, z);
             } catch (NumberFormatException ignored) {}
         }
-        BlockPos targetPos = detectTargetPosition();
-        if (targetPos != null) {
-            return targetPos;
-        }
-        BlockPos botPos = (this.bot != null) ? this.bot.blockPosition() : findBotPosition();
-        if (botPos != null) {
-            return botPos;
-        }
-        if (Minecraft.getInstance().player != null) {
-            return Minecraft.getInstance().player.blockPosition();
-        }
         return null;
     }
 

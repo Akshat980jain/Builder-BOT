@@ -1,33 +1,16 @@
 {
   "name": "Minecraft Builder Bot",
   "bot": {
-    "username": "BuilderBot",
+    "username": "Builder_Bot",
     "password": "",
-    "type": "offline"
+    "type": "offline",
+    "authorizedUsers": []
   },
   "server": {
     "ip": "akshat908-qceo.aternos.me",
     "port": 14539,
     "version": "1.21.4",
-    "tryCreative": true,
-    "viaProxy": {
-      "enabled": false,
-      "host": "127.0.0.1",
-      "port": 25577,
-      "targetVersion": "26.2"
-    }
-  },
-  "swarm": {
-    "enabled": true,
-    "targetCount": 3,
-    "autoSpawnAll": false,
-    "staggerJoinDelay": 15000,
-    "autoAuthPassword": "chalol78",
-    "antiAfk": true,
-    "placeDelayMs": 35
-  },
-  "builder": {
-    "defaultBlock": "cobblestone"
+    "tryCreative": true
   },
   "utils": {
     "auto-auth": {
@@ -35,11 +18,40 @@
       "password": "chalol78"
     },
     "auto-reconnect": true,
-    "auto-reconnect-delay": 15000,
-    "max-reconnect-delay": 60000,
+    "auto-reconnect-delay": 5000,
+    "max-reconnect-delay": 30000,
     "chat-log": true
   },
+  "builder": {
+    "defaultBlock": "cobblestone",
+    "placeDelayMs": 40,
+    "creativeDelayMs": 25,
+    "scaffoldBlock": "dirt",
+    "autoClearArea": false,
+    "defaultOrigin": {
+      "x": 0,
+      "y": 64,
+      "z": 0
+    }
+  },
+  "safety": {
+    "autoEat": {
+      "enabled": true,
+      "minFood": 14
+    },
+    "minHealth": 6,
+    "lavaProtection": true,
+    "flightProtection": true
+  },
+  "swarm": {
+    "enabled": true,
+    "targetCount": 10,
+    "autoSpawnAll": false,
+    "staggerJoinDelay": 6000,
+    "autoAuthPassword": "chalol78",
+    "antiAfk": true
+  },
   "web": {
-    "port": 8080
+    "port": 5000
   }
 }
