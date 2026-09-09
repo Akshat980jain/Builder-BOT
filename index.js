@@ -1509,29 +1509,29 @@ function createBuilderBot() {
 
     const rStr       = String(kickReason).toLowerCase();
     const onlineTime = botState.spawnTime ? Date.now() - botState.spawnTime : 0;
+    const isSwarmActive = swarm && swarm.isSupervisorRunning && swarm.bots && swarm.bots.size > 1;
 
     if (rStr.includes("duplicate_login") || rStr.includes("already connected")) {
-      if (onlineTime > 20000) {
-        // Bot was stable for 20+ seconds then got kicked — this is Aternos's proxy
-        // kicking us because a SWARM BOT joined from the same IP. No lingering
-        // old session to wait for — use a short (15s) reconnect delay.
+      if (isSwarmActive && onlineTime > 20000) {
+        // Swarm bots were actively joining from the same IP when the primary was kicked
         botState.proxyKick = true;
         addLog(
-          `[Auth] Proxy kick detected (was online ${(onlineTime / 1000).toFixed(0)}s) — ` +
-          `likely caused by swarm bot joining same IP. Reconnecting in 15s.`,
+          `[Auth] Proxy kick during active swarm fleet (was online ${(onlineTime / 1000).toFixed(0)}s). Reconnecting in 15s.`,
           "General"
         );
+        rescheduleReconnect(15000);
       } else {
-        // Kicked immediately/soon after joining — there's an old session still alive
-        // (e.g. from previous Render deployment). Must wait 45s for Aternos to expire it.
+        // Server or proxy still has the previous session registered.
+        // Minecraft keepalive ping timeout is 30-45s. We wait 60s so Aternos
+        // is guaranteed to have dropped the ghost entity completely.
         botState.isDuplicateLogin = true;
-        addLog("[Auth] Startup duplicate session detected — waiting 45s for Aternos to expire old session.", "General");
+        addLog("[Auth] Duplicate session detected — waiting 60s for server to completely clear ghost session.", "General");
+        rescheduleReconnect(60000);
       }
-    }
-
-    if (rStr.includes("throttl") || rStr.includes("wait") || rStr.includes("too fast") ||
-        rStr.includes("flying")  || rStr.includes("econnreset")) {
+    } else if (rStr.includes("throttl") || rStr.includes("wait") || rStr.includes("too fast") ||
+               rStr.includes("flying")  || rStr.includes("econnreset")) {
       botState.wasThrottled = true;
+      rescheduleReconnect(20000);
     }
   });
 
@@ -1549,15 +1549,41 @@ function createBuilderBot() {
     botState.connected = false;
     botState.spawnTime = null;
     addLog(`🔴 Bot disconnected from server: ${reason}`, "General");
-    scheduleReconnect();
+
+    // Defer scheduleReconnect so that if a 'kicked' packet was received
+    // simultaneously, its handler runs first and categorizes the delay.
+    setTimeout(() => {
+      if (!isReconnecting) {
+        scheduleReconnect();
+      }
+    }, 500);
   });
 }
 
 /**
+ * Reschedules or overrides an active reconnect timer with a specific delay.
+ */
+function rescheduleReconnect(customDelay) {
+  if (!config.utils?.["auto-reconnect"]) return;
+  if (reconnectTimeoutId) {
+    clearTimeout(reconnectTimeoutId);
+    reconnectTimeoutId = null;
+  }
+  isReconnecting = true;
+  botState.reconnectAttempts++;
+  addLog(`[Reconnect] Reconnecting in ${(customDelay / 1000).toFixed(1)}s (Attempt #${botState.reconnectAttempts})...`, "General");
+
+  reconnectTimeoutId = setTimeout(() => {
+    isReconnecting = false;
+    createBuilderBot();
+  }, customDelay);
+}
+
+/**
  * Schedules a reconnect with smart delay selection:
- * - isDuplicateLogin (startup ghost): 45s
- * - proxyKick (Aternos proxy kicked us due to swarm bot): 15s
- * - wasThrottled (rate limit, flying, etc.): 15s
+ * - isDuplicateLogin (server ghost session): 60s
+ * - proxyKick (Aternos proxy kicked us due to swarm fleet): 15s
+ * - wasThrottled (rate limit, flying, etc.): 20s
  * - normal disconnect: exponential backoff from settings
  */
 function scheduleReconnect() {
@@ -1570,18 +1596,15 @@ function scheduleReconnect() {
   let delay  = Math.min(base * Math.pow(1.25, botState.reconnectAttempts - 1), max);
 
   if (botState.isDuplicateLogin) {
-    // Old session from previous deploy still alive on Aternos proxy
-    delay = Math.max(delay, 45000);
+    delay = 60000;
     botState.isDuplicateLogin = false;
-    addLog("[Reconnect] Waiting 45s for Aternos to expire ghost session...", "General");
+    addLog("[Reconnect] Waiting 60s for server to fully expire ghost session...", "General");
   } else if (botState.proxyKick) {
-    // Kicked by Aternos proxy when a swarm bot from same IP joined
-    // No old session to expire — reconnect quickly
     delay = 15000;
     botState.proxyKick = false;
-    addLog("[Reconnect] Proxy kick — reconnecting in 15s...", "General");
+    addLog("[Reconnect] Swarm proxy kick — reconnecting in 15s...", "General");
   } else if (botState.wasThrottled) {
-    delay = Math.max(delay, 15000);
+    delay = Math.max(delay, 20000);
     botState.wasThrottled = false;
   }
 
@@ -1593,6 +1616,26 @@ function scheduleReconnect() {
     createBuilderBot();
   }, delay);
 }
+
+// ── PROCESS LIFECYCLE & CLEAN SHUTDOWN ──────────────────────────
+function handleGracefulShutdown(signal) {
+  addLog(`[Process] ${signal} received — cleanly disconnecting bot from server...`, "General");
+  console.log(`==> [Process] ${signal} received. Disconnecting bot cleanly...`);
+  config.utils["auto-reconnect"] = false;
+  isReconnecting = true;
+  if (reconnectTimeoutId) clearTimeout(reconnectTimeoutId);
+  if (connectionTimeoutId) clearTimeout(connectionTimeoutId);
+  if (swarm) {
+    try { swarm.despawnSwarm(false); } catch (_) {}
+  }
+  destroyBot();
+  setTimeout(() => {
+    process.exit(0);
+  }, 1200);
+}
+
+process.on("SIGTERM", () => handleGracefulShutdown("SIGTERM"));
+process.on("SIGINT", () => handleGracefulShutdown("SIGINT"));
 
 process.on("uncaughtException", (err) => {
   const msg = err.message || String(err);
