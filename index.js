@@ -55,8 +55,12 @@ function listSchematicFiles() {
 // ============================================================
 // EXPRESS WEB DASHBOARD & API
 // ============================================================
+// ============================================================
+// EXPRESS WEB DASHBOARD & API
+// ============================================================
 const app = express();
 app.use(express.json());
+app.use("/public", express.static(path.join(__dirname, "public")));
 const PORT = process.env.PORT || config.web?.port || 5000;
 
 const upload = multer({
@@ -226,7 +230,7 @@ app.post("/api/command", (req, res) => {
 });
 
 // ============================================================
-// WEB DASHBOARD HTML
+// WEB DASHBOARD HTML - MINECRAFT DARK THEME EDITION
 // ============================================================
 app.get("/", (req, res) => {
   res.send(`
@@ -237,138 +241,404 @@ app.get("/", (req, res) => {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>${config.name || "Minecraft Builder Bot"} - Mission Control</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Outfit:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
     :root {
-      --bg: #090d16;
-      --card-bg: rgba(17, 24, 39, 0.75);
-      --border: rgba(255, 255, 255, 0.08);
-      --accent: #f59e0b;
-      --accent-glow: rgba(245, 158, 11, 0.25);
-      --accent-blue: #38bdf8;
-      --accent-purple: #a855f7;
-      --success: #10b981;
-      --danger: #ef4444;
-      --text: #f8fafc;
+      --bg-dark: #0a0d14;
+      --panel-bg: rgba(18, 23, 34, 0.88);
+      --panel-border-light: rgba(255, 255, 255, 0.12);
+      --panel-border-dark: rgba(0, 0, 0, 0.7);
+      --mc-gold: #f59e0b;
+      --mc-gold-light: #fbbf24;
+      --mc-gold-dark: #b45309;
+      --mc-red: #ef4444;
+      --mc-green: #22c55e;
+      --mc-blue: #3b82f6;
+      --mc-purple: #a855f7;
+      --mc-cyan: #06b6d4;
+      --text-main: #f1f5f9;
       --text-muted: #94a3b8;
+      --slot-bg: #090c13;
     }
+
     * { box-sizing: border-box; margin: 0; padding: 0; }
+
     body {
       font-family: 'Outfit', sans-serif;
-      background: radial-gradient(circle at 15% 15%, #1e1b4b 0%, var(--bg) 95%);
-      color: var(--text);
+      background: linear-gradient(180deg, rgba(8, 11, 18, 0.88) 0%, rgba(13, 17, 26, 0.95) 100%),
+                  url('/public/bg.jpg') no-repeat center center fixed;
+      background-size: cover;
+      color: var(--text-main);
       min-height: 100vh;
-      padding: 24px;
+      padding: 24px 16px;
+      position: relative;
     }
-    .container { max-width: 1260px; margin: 0 auto; }
-    
+
+    /* Ambient Ember Particle Overlay */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background-image: 
+        radial-gradient(2px 2px at 20px 30px, #f59e0b, rgba(0,0,0,0)),
+        radial-gradient(2px 2px at 150px 120px, #fbbf24, rgba(0,0,0,0)),
+        radial-gradient(3px 3px at 320px 240px, #ef4444, rgba(0,0,0,0)),
+        radial-gradient(2px 2px at 450px 80px, #f59e0b, rgba(0,0,0,0)),
+        radial-gradient(2px 2px at 600px 350px, #fbbf24, rgba(0,0,0,0)),
+        radial-gradient(3px 3px at 800px 180px, #ef4444, rgba(0,0,0,0));
+      opacity: 0.35;
+      animation: embersFloat 20s linear infinite;
+      z-index: 0;
+    }
+
+    @keyframes embersFloat {
+      0% { transform: translateY(0); }
+      100% { transform: translateY(-300px); }
+    }
+
+    .container { max-width: 1280px; margin: 0 auto; position: relative; z-index: 1; }
+
+    /* Header with Minecraft Icon & Pixel Branding */
     header {
       display: flex; justify-content: space-between; align-items: center;
-      margin-bottom: 24px; padding-bottom: 16px; border-bottom: 1px solid var(--border);
+      margin-bottom: 24px; padding: 14px 20px;
+      background: rgba(14, 18, 27, 0.85);
+      backdrop-filter: blur(16px);
+      border: 2px solid #2d3748;
+      border-top-color: #4b5563;
+      border-left-color: #4b5563;
+      border-bottom-color: #0f172a;
+      border-right-color: #0f172a;
+      border-radius: 12px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.6);
     }
-    .logo {
-      font-size: 26px; font-weight: 800;
-      background: linear-gradient(135deg, #f59e0b, #fbbf24, #f97316);
-      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-      display: flex; align-items: center; gap: 8px;
+
+    .brand {
+      display: flex; align-items: center; gap: 14px;
     }
+    .brand-icon {
+      width: 44px; height: 44px; border-radius: 8px;
+      border: 2px solid var(--mc-gold);
+      box-shadow: 0 0 16px rgba(245, 158, 11, 0.4);
+      object-fit: cover;
+    }
+    .logo-text {
+      font-family: 'Press Start 2P', monospace;
+      font-size: 15px;
+      color: #fbbf24;
+      text-shadow: 2px 2px 0 #000, 0 0 15px rgba(245, 158, 11, 0.6);
+      letter-spacing: 0.5px;
+    }
+    .logo-sub {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      margin-top: 3px;
+    }
+
     .nav-tabs { display: flex; gap: 8px; }
     .tab-btn {
-      background: rgba(255,255,255,0.05); border: 1px solid var(--border); color: var(--text-muted);
-      padding: 8px 18px; border-radius: 10px; font-weight: 700; cursor: pointer; transition: all 0.2s;
+      background: linear-gradient(180deg, #273142 0%, #17202f 100%);
+      border: 2px solid #3b4759;
+      border-top-color: #55657d;
+      border-left-color: #55657d;
+      border-bottom-color: #0c121d;
+      border-right-color: #0c121d;
+      color: var(--text-muted);
+      padding: 10px 18px; border-radius: 8px; font-weight: 800; cursor: pointer;
+      transition: all 0.15s ease;
+      font-size: 13px;
+      text-transform: uppercase;
+      box-shadow: 0 3px 0 #0c121d;
     }
-    .tab-btn.active, .tab-btn:hover { background: var(--accent); color: #000; box-shadow: 0 0 12px var(--accent-glow); }
-    
+    .tab-btn:hover {
+      color: #fff;
+      border-color: var(--mc-gold);
+      transform: translateY(-1px);
+    }
+    .tab-btn.active {
+      background: linear-gradient(180deg, #f59e0b 0%, #b45309 100%);
+      color: #000;
+      font-weight: 900;
+      border-top-color: #fef08a;
+      border-left-color: #fef08a;
+      border-bottom-color: #78350f;
+      border-right-color: #78350f;
+      box-shadow: 0 3px 0 #451a03, 0 0 18px rgba(245, 158, 11, 0.5);
+      text-shadow: 0 1px 0 rgba(255,255,255,0.4);
+    }
+
     .status-badge {
-      display: inline-flex; align-items: center; gap: 8px; padding: 8px 16px; border-radius: 9999px;
-      font-weight: 600; font-size: 14px; background: rgba(0,0,0,0.5); border: 1px solid var(--border);
+      display: inline-flex; align-items: center; gap: 8px; padding: 8px 16px; border-radius: 8px;
+      font-weight: 700; font-size: 13px; font-family: 'JetBrains Mono', monospace;
+      background: #090c13;
+      border: 2px solid #1e293b;
+      box-shadow: inset 1px 1px 3px rgba(0,0,0,0.8);
     }
-    .status-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--danger); }
-    .status-dot.online { background: var(--success); box-shadow: 0 0 10px var(--success); }
+    .status-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--mc-red); }
+    .status-dot.online { background: var(--mc-green); box-shadow: 0 0 12px var(--mc-green); }
 
     .tab-content { display: none; }
     .tab-content.active { display: block; }
     
-    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; }
-    .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 20px; }
-    .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 20px; }
-    @media (max-width: 900px) { .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; } }
+    .grid-2 { display: grid; grid-template-columns: 1fr 1.15fr; gap: 20px; margin-bottom: 20px; }
+    .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 20px; }
+    @media (max-width: 960px) { .grid-2, .grid-4 { grid-template-columns: 1fr; } }
 
+    /* Minecraft GUI Themed Card Panel */
     .card {
-      background: var(--card-bg); backdrop-filter: blur(16px); border: 1px solid var(--border);
-      border-radius: 16px; padding: 22px; box-shadow: 0 8px 32px rgba(0,0,0,0.3); margin-bottom: 20px;
+      background: var(--panel-bg);
+      backdrop-filter: blur(20px);
+      border: 2px solid #2d3748;
+      border-top-color: #4b5563;
+      border-left-color: #4b5563;
+      border-bottom-color: #0b111e;
+      border-right-color: #0b111e;
+      border-radius: 12px;
+      padding: 22px;
+      box-shadow: inset 1px 1px 0px rgba(255,255,255,0.06), 0 16px 40px rgba(0,0,0,0.7);
+      margin-bottom: 20px;
     }
-    .card h2 { font-size: 18px; margin-bottom: 16px; color: var(--accent); font-weight: 700; display: flex; align-items: center; gap: 8px; }
-    .card h3 { font-size: 13px; color: var(--text-muted); text-transform: uppercase; font-weight: 700; margin: 14px 0 8px; }
+    .card h2 {
+      font-size: 16px; font-family: 'Press Start 2P', monospace;
+      margin-bottom: 18px; color: #fbbf24;
+      display: flex; align-items: center; gap: 10px;
+      letter-spacing: 0.5px;
+      text-shadow: 1px 1px 0 #000;
+    }
+    .card h3 {
+      font-size: 12px; color: var(--text-muted); text-transform: uppercase; font-weight: 800;
+      letter-spacing: 1px; margin: 16px 0 8px; display: flex; align-items: center; gap: 6px;
+    }
 
-    .input-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 10px; }
-    .coord-field label { font-size: 12px; font-weight: 700; color: var(--text-muted); display: block; margin-bottom: 4px; }
-    .input-text, select {
-      width: 100%; background: rgba(0,0,0,0.4); border: 1px solid var(--border); border-radius: 8px;
-      padding: 10px 12px; color: #fff; font-family: 'JetBrains Mono', monospace; font-size: 14px; font-weight: 600;
+    /* Minecraft Inventory Coordinate Slots (X: Red, Y: Green, Z: Blue) */
+    .coord-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 10px; }
+    .coord-slot {
+      background: var(--slot-bg);
+      border: 2px solid #1e293b;
+      border-top-color: #0a0f18;
+      border-left-color: #0a0f18;
+      border-bottom-color: #334155;
+      border-right-color: #334155;
+      border-radius: 8px;
+      padding: 10px 12px;
+      box-shadow: inset 2px 2px 4px rgba(0,0,0,0.8);
+      position: relative;
     }
-    .input-text:focus, select:focus { outline: none; border-color: var(--accent); }
-    
+    .coord-slot.x-slot { border-left: 3px solid var(--mc-red); }
+    .coord-slot.y-slot { border-left: 3px solid var(--mc-green); }
+    .coord-slot.z-slot { border-left: 3px solid var(--mc-blue); }
+
+    .coord-slot label {
+      font-size: 11px; font-family: 'Press Start 2P', monospace;
+      display: block; margin-bottom: 6px;
+    }
+    .x-slot label { color: #f87171; }
+    .y-slot label { color: #4ade80; }
+    .z-slot label { color: #60a5fa; }
+
+    .coord-input {
+      width: 100%; background: transparent; border: none; outline: none;
+      color: #fff; font-family: 'JetBrains Mono', monospace; font-size: 16px; font-weight: 700;
+    }
+
+    /* Minecraft Styled Inputs & Selects */
+    .mc-input, select {
+      width: 100%;
+      background: var(--slot-bg);
+      border: 2px solid #1e293b;
+      border-top-color: #0a0f18;
+      border-left-color: #0a0f18;
+      border-bottom-color: #334155;
+      border-right-color: #334155;
+      border-radius: 8px;
+      padding: 10px 14px;
+      color: #fff;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 14px; font-weight: 600;
+      box-shadow: inset 2px 2px 4px rgba(0,0,0,0.8);
+    }
+    .mc-input:focus, select:focus { outline: none; border-color: var(--mc-gold); }
+
     .btn-pos {
-      background: rgba(245, 158, 11, 0.1); border: 1px dashed var(--accent); color: var(--accent);
-      padding: 8px 12px; border-radius: 8px; font-size: 12px; font-weight: 700; cursor: pointer;
-      width: 100%; margin-top: 4px; transition: all 0.2s;
+      background: linear-gradient(180deg, #1e293b 0%, #0f172a 100%);
+      border: 2px dashed #f59e0b;
+      color: #fbbf24;
+      padding: 10px 14px; border-radius: 8px; font-size: 12px; font-weight: 800; cursor: pointer;
+      width: 100%; margin-top: 6px; transition: all 0.2s; text-transform: uppercase;
+      display: flex; align-items: center; justify-content: center; gap: 8px;
     }
-    .btn-pos:hover { background: var(--accent); color: #000; }
+    .btn-pos:hover { background: var(--mc-gold); color: #000; }
 
-    .radio-pill-group { display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 8px; margin-top: 8px; }
+    /* Rotation Compass Pills */
+    .radio-pill-group { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 6px; }
     .radio-pill {
-      background: rgba(0,0,0,0.3); border: 1px solid var(--border); border-radius: 10px; padding: 10px;
-      text-align: center; cursor: pointer; transition: all 0.2s; font-size: 14px; font-weight: 600;
+      background: #0f172a; border: 2px solid #1e293b; border-radius: 8px; padding: 10px 6px;
+      text-align: center; cursor: pointer; transition: all 0.15s; font-size: 12px; font-weight: 800;
+      font-family: 'JetBrains Mono', monospace; color: var(--text-muted);
     }
-    .radio-pill.active { background: var(--accent); color: #000; font-weight: 700; border-color: var(--accent); }
-
-    .btn-action {
-      background: linear-gradient(135deg, #f59e0b, #d97706); color: #000; border: none; border-radius: 10px;
-      padding: 12px 20px; font-size: 16px; font-weight: 800; cursor: pointer; width: 100%;
-      box-shadow: 0 4px 15px var(--accent-glow); transition: all 0.2s; margin-top: 12px;
+    .radio-pill:hover { border-color: var(--mc-gold); color: #fff; }
+    .radio-pill.active {
+      background: linear-gradient(180deg, #f59e0b 0%, #b45309 100%);
+      color: #000; font-weight: 900; border-color: #fef08a;
+      box-shadow: 0 0 12px rgba(245, 158, 11, 0.4);
     }
-    .btn-action:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(245, 158, 11, 0.4); }
 
+    /* Minecraft File Upload Dropzone */
+    .dropzone {
+      border: 2px dashed #4b5563; border-radius: 10px; padding: 16px; text-align: center;
+      background: rgba(9, 12, 19, 0.6); cursor: pointer; transition: all 0.2s; margin-bottom: 12px;
+    }
+    .dropzone:hover { border-color: var(--mc-gold); background: rgba(245, 158, 11, 0.05); }
+    .dropzone-icon { font-size: 26px; margin-bottom: 4px; }
+    .dropzone-text { font-size: 13px; font-weight: 700; color: var(--text-main); }
+    .dropzone-hint { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+
+    /* Primary Minecraft Action Button */
+    .btn-launch {
+      background: linear-gradient(180deg, #f59e0b 0%, #b45309 100%);
+      color: #000;
+      border: 2px solid #fbbf24;
+      border-top-color: #fef08a;
+      border-left-color: #fef08a;
+      border-bottom-color: #78350f;
+      border-right-color: #78350f;
+      border-radius: 8px;
+      padding: 14px 20px;
+      font-size: 15px;
+      font-family: 'Press Start 2P', monospace;
+      cursor: pointer;
+      width: 100%;
+      box-shadow: 0 4px 0 #451a03, 0 8px 24px rgba(245, 158, 11, 0.45);
+      transition: all 0.1s ease;
+      margin-top: 14px;
+      text-shadow: 0 1px 0 rgba(255,255,255,0.4);
+    }
+    .btn-launch:hover {
+      background: linear-gradient(180deg, #fbbf24 0%, #d97706 100%);
+      transform: translateY(-2px);
+      box-shadow: 0 6px 0 #451a03, 0 10px 30px rgba(245, 158, 11, 0.6);
+    }
+    .btn-launch:active {
+      transform: translateY(3px);
+      box-shadow: 0 1px 0 #451a03;
+    }
+
+    /* Button Bar */
     .btn-group { display: flex; gap: 8px; margin-top: 10px; }
-    .btn-sec {
-      flex: 1; background: rgba(255,255,255,0.06); border: 1px solid var(--border); color: #fff;
-      padding: 10px; border-radius: 8px; font-weight: 700; cursor: pointer; transition: all 0.2s;
+    .mc-btn {
+      flex: 1;
+      background: linear-gradient(180deg, #334155 0%, #1e293b 100%);
+      border: 2px solid #475569;
+      border-top-color: #64748b;
+      border-left-color: #64748b;
+      border-bottom-color: #0f172a;
+      border-right-color: #0f172a;
+      color: #fff;
+      padding: 10px 8px;
+      border-radius: 8px;
+      font-weight: 800;
+      font-size: 12px;
+      cursor: pointer;
+      box-shadow: 0 3px 0 #0f172a;
+      transition: all 0.1s;
+      text-transform: uppercase;
+      display: flex; align-items: center; justify-content: center; gap: 4px;
     }
-    .btn-sec:hover { background: rgba(255,255,255,0.12); }
-    .btn-danger { background: rgba(239,68,68,0.2); border-color: var(--danger); color: var(--danger); }
-    .btn-danger:hover { background: var(--danger); color: #fff; }
+    .mc-btn:hover { background: #475569; transform: translateY(-1px); }
+    .mc-btn:active { transform: translateY(2px); box-shadow: 0 1px 0 #0f172a; }
 
-    /* Progress bar */
-    .progress-bar-bg { width: 100%; height: 16px; background: rgba(0,0,0,0.5); border-radius: 9999px; overflow: hidden; margin: 12px 0 6px; border: 1px solid var(--border); }
-    .progress-bar-fill { height: 100%; background: linear-gradient(90deg, #f59e0b, #10b981); width: 0%; transition: width 0.3s; }
+    .mc-btn-danger {
+      background: linear-gradient(180deg, #ef4444 0%, #991b1b 100%);
+      border-color: #f87171 #f87171 #450a0a #450a0a;
+      box-shadow: 0 3px 0 #450a0a;
+    }
+    .mc-btn-purple {
+      background: linear-gradient(180deg, #a855f7 0%, #6b21a8 100%);
+      border-color: #c084fc #c084fc #3b0764 #3b0764;
+      box-shadow: 0 3px 0 #3b0764;
+    }
 
-    /* Telemetry metrics */
-    .metric-card { background: rgba(0,0,0,0.3); border: 1px solid var(--border); border-radius: 12px; padding: 14px; text-align: center; }
-    .metric-val { font-size: 24px; font-weight: 800; color: #fff; font-family: 'JetBrains Mono', monospace; }
-    .metric-label { font-size: 12px; color: var(--text-muted); font-weight: 700; text-transform: uppercase; margin-top: 4px; }
+    /* Minecraft XP / Boss Bar */
+    .xp-bar-container {
+      width: 100%; height: 22px; background: #000;
+      border: 2px solid #334155; border-radius: 4px;
+      position: relative; overflow: hidden; margin: 12px 0 6px;
+      box-shadow: inset 1px 1px 3px rgba(0,0,0,0.9);
+    }
+    .xp-bar-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #10b981 0%, #22c55e 50%, #f59e0b 100%);
+      width: 0%;
+      transition: width 0.3s ease;
+      box-shadow: 0 0 12px rgba(34, 197, 94, 0.6);
+    }
+    .xp-bar-text {
+      position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+      font-family: 'Press Start 2P', monospace; font-size: 10px; color: #fff;
+      text-shadow: 1px 1px 0 #000, -1px -1px 0 #000;
+    }
 
-    /* Table */
-    table { width: 100%; border-collapse: collapse; margin-top: 12px; }
-    th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border); font-size: 14px; }
-    th { color: var(--text-muted); font-weight: 700; text-transform: uppercase; font-size: 12px; }
+    /* Telemetry Metrics */
+    .metric-card {
+      background: var(--slot-bg);
+      border: 2px solid #1e293b;
+      border-top-color: #0a0f18;
+      border-left-color: #0a0f18;
+      border-bottom-color: #334155;
+      border-right-color: #334155;
+      border-radius: 8px;
+      padding: 16px;
+      text-align: center;
+      box-shadow: inset 2px 2px 4px rgba(0,0,0,0.8);
+    }
+    .metric-val {
+      font-size: 26px; font-weight: 900; color: #fbbf24;
+      font-family: 'JetBrains Mono', monospace;
+      text-shadow: 0 0 12px rgba(245, 158, 11, 0.4);
+    }
+    .metric-label {
+      font-size: 11px; color: var(--text-muted); font-weight: 800;
+      text-transform: uppercase; margin-top: 4px; letter-spacing: 0.5px;
+    }
 
-    /* Logs */
+    /* Swarm Table */
+    table { width: 100%; border-collapse: collapse; margin-top: 14px; }
+    th, td { padding: 12px 14px; text-align: left; border-bottom: 1px solid rgba(255,255,255,0.06); font-size: 14px; }
+    th {
+      font-family: 'Press Start 2P', monospace; font-size: 10px; color: #fbbf24;
+      text-transform: uppercase; background: rgba(0,0,0,0.4);
+    }
+    .bot-avatar { width: 28px; height: 28px; border-radius: 4px; vertical-align: middle; margin-right: 8px; border: 1px solid #475569; }
+
+    /* Console */
     .logs-console {
-      height: 380px; background: #050810; border: 1px solid var(--border); border-radius: 12px;
-      padding: 14px; font-family: 'JetBrains Mono', monospace; font-size: 13px; overflow-y: auto; color: #cbd5e1;
+      height: 380px; background: #05070c; border: 2px solid #1e293b; border-radius: 8px;
+      padding: 14px; font-family: 'JetBrains Mono', monospace; font-size: 13px;
+      overflow-y: auto; color: #cbd5e1; box-shadow: inset 2px 2px 6px rgba(0,0,0,0.9);
     }
     .log-entry { margin-bottom: 4px; line-height: 1.5; }
-    .log-builder { color: #f59e0b; }
+    .log-builder { color: #fbbf24; }
     .log-schematic { color: #38bdf8; }
-    .log-swarm { color: #a855f7; }
-    .log-safety { color: #ef4444; }
+    .log-swarm { color: #c084fc; }
+    .log-safety { color: #f87171; }
+    .log-chat { color: #4ade80; }
   </style>
 </head>
 <body>
   <div class="container">
     <header>
-      <div class="logo">🏗️ ${config.name || "Minecraft Builder Bot"}</div>
+      <div class="brand">
+        <img src="/public/icon.jpg" alt="Logo" class="brand-icon" onerror="this.style.display='none'">
+        <div>
+          <div class="logo-text">MINECRAFT BUILDER BOT</div>
+          <div class="logo-sub">24/7 Autonomous Construction Engine</div>
+        </div>
+      </div>
       <div class="nav-tabs">
         <button class="tab-btn active" onclick="showTab('tab-build')">🚀 Build Studio</button>
         <button class="tab-btn" onclick="showTab('tab-swarm')">🤖 Swarm Fleet</button>
@@ -386,38 +656,38 @@ app.get("/", (req, res) => {
       <div class="grid-2">
         <!-- Origin & Build Mode -->
         <div class="card">
-          <h2>📍 Target Origin Coordinates</h2>
-          <div class="input-row">
-            <div class="coord-field">
-              <label>Origin X</label>
-              <input type="number" id="origin-x" class="input-text" value="0">
+          <h2>🧭 Target Build Origin</h2>
+          <div class="coord-grid">
+            <div class="coord-slot x-slot">
+              <label>X-AXIS</label>
+              <input type="number" id="origin-x" class="coord-input" value="0">
             </div>
-            <div class="coord-field">
-              <label>Origin Y</label>
-              <input type="number" id="origin-y" class="input-text" value="64">
+            <div class="coord-slot y-slot">
+              <label>Y-HEIGHT</label>
+              <input type="number" id="origin-y" class="coord-input" value="64">
             </div>
-            <div class="coord-field">
-              <label>Origin Z</label>
-              <input type="number" id="origin-z" class="input-text" value="0">
+            <div class="coord-slot z-slot">
+              <label>Z-AXIS</label>
+              <input type="number" id="origin-z" class="coord-input" value="0">
             </div>
           </div>
-          <button class="btn-pos" onclick="useBotPosition()">📌 Use Current Bot Position</button>
+          <button class="btn-pos" onclick="useBotPosition()">📌 Set To Current Bot Position</button>
 
-          <h3>🔄 Structure Rotation</h3>
+          <h3>🧭 Structure Rotation (Facing)</h3>
           <div class="radio-pill-group" id="rotation-group">
-            <div class="radio-pill active" onclick="setRotation(0)">0°</div>
-            <div class="radio-pill" onclick="setRotation(90)">90°</div>
-            <div class="radio-pill" onclick="setRotation(180)">180°</div>
-            <div class="radio-pill" onclick="setRotation(270)">270°</div>
+            <div class="radio-pill active" onclick="setRotation(0)">0° North</div>
+            <div class="radio-pill" onclick="setRotation(90)">90° East</div>
+            <div class="radio-pill" onclick="setRotation(180)">180° South</div>
+            <div class="radio-pill" onclick="setRotation(270)">270° West</div>
           </div>
 
           <h3>🤖 Workforce Scale</h3>
           <select id="swarm-count-select">
-            <option value="1">Single Bot (Builder_Bot)</option>
-            <option value="2">2 Bots Swarm</option>
-            <option value="3" selected>3 Bots Swarm</option>
-            <option value="5">5 Bots Swarm</option>
-            <option value="10">10 Bots Full Fleet (Maximum Speed)</option>
+            <option value="1">1 Bot (Solo Builder)</option>
+            <option value="2">2 Bots (Duo Team)</option>
+            <option value="3" selected>3 Bots (Trio Squad)</option>
+            <option value="5">5 Bots (Fast Strike Team)</option>
+            <option value="10">10 Bots (Full Swarm - 10x Speed)</option>
           </select>
         </div>
 
@@ -425,16 +695,20 @@ app.get("/", (req, res) => {
         <div class="card">
           <h2>📜 Select Structure to Build</h2>
           
-          <h3>Mode: Schematic File (.litematic / .nbt / .schem)</h3>
-          <select id="schematic-select" style="margin-bottom: 8px;">
+          <h3>Mode A: Schematic File (.litematic / .nbt / .schem)</h3>
+          <select id="schematic-select" style="margin-bottom: 12px;">
             <option value="">Loading schematics...</option>
           </select>
 
-          <h3>Upload Schematic</h3>
-          <input type="file" id="schematic-upload" accept=".litematic,.nbt,.schem,.schematic" style="margin-bottom: 12px; color: var(--text-muted);">
+          <div class="dropzone" onclick="document.getElementById('schematic-upload').click()">
+            <div class="dropzone-icon">📥</div>
+            <div class="dropzone-text">Click or Drag Schematic File to Upload</div>
+            <div class="dropzone-hint">Supports .litematic, .nbt, .schematic, .schem (Max 50MB)</div>
+          </div>
+          <input type="file" id="schematic-upload" accept=".litematic,.nbt,.schem,.schematic" style="display: none;">
 
-          <h3>Or Procedural Geometry</h3>
-          <div class="input-row">
+          <h3>Mode B: Procedural Geometry Generator</h3>
+          <div style="display: grid; grid-template-columns: 1.2fr 1.5fr 1fr; gap: 8px; margin-bottom: 14px;">
             <select id="procedural-shape">
               <option value="none">-- Use Schematic Instead --</option>
               <option value="floor">Floor / Platform</option>
@@ -444,18 +718,18 @@ app.get("/", (req, res) => {
               <option value="pyramid">Pyramid</option>
               <option value="dome">Dome / Sphere</option>
             </select>
-            <input type="text" id="procedural-block" class="input-text" placeholder="minecraft:stone" value="minecraft:stone_bricks">
-            <input type="number" id="procedural-size" class="input-text" placeholder="Size/Radius" value="8">
+            <input type="text" id="procedural-block" class="mc-input" placeholder="minecraft:stone_bricks" value="minecraft:stone_bricks">
+            <input type="number" id="procedural-size" class="mc-input" placeholder="Size" value="8">
           </div>
 
-          <button class="btn-action" onclick="launchBuild()">🚀 Launch Build Mission</button>
+          <button class="btn-launch" onclick="launchBuild()">🚀 Launch Build Mission</button>
 
           <div class="btn-group">
-            <button class="btn-sec" onclick="pauseBuild()">⏸️ Pause</button>
-            <button class="btn-sec" onclick="resumeBuild()">▶️ Resume</button>
-            <button class="btn-sec btn-danger" onclick="stopBuild()">🛑 Stop</button>
-            <button class="btn-sec" onclick="undoBuild()">↩️ Undo</button>
-            <button class="btn-sec" onclick="clearArea()">🧹 Clear Area</button>
+            <button class="mc-btn" onclick="pauseBuild()">⏸️ Pause</button>
+            <button class="mc-btn" onclick="resumeBuild()">▶️ Resume</button>
+            <button class="mc-btn mc-btn-danger" onclick="stopBuild()">🛑 Stop</button>
+            <button class="mc-btn mc-btn-purple" onclick="undoBuild()">↩️ Undo</button>
+            <button class="mc-btn" onclick="clearArea()">🧹 Clear</button>
           </div>
         </div>
       </div>
@@ -465,27 +739,27 @@ app.get("/", (req, res) => {
     <div id="tab-swarm" class="tab-content">
       <div class="card">
         <h2>🤖 Swarm Workforce Fleet Supervisor</h2>
-        <p style="color: var(--text-muted); margin-bottom: 14px;">The 24/7 supervisor automatically spawns, auto-authenticates, and maintains worker bots across server restarts.</p>
+        <p style="color: var(--text-muted); margin-bottom: 16px; font-size: 14px;">The 24/7 supervisor automatically spawns, auto-authenticates, and maintains worker bots across server restarts.</p>
         
-        <div style="display: flex; gap: 12px; align-items: center; margin-bottom: 16px;">
-          <button class="btn-sec" onclick="spawnSwarm(3)">Spawn 3 Bots</button>
-          <button class="btn-sec" onclick="spawnSwarm(5)">Spawn 5 Bots</button>
-          <button class="btn-sec" onclick="spawnSwarm(10)">Spawn 10 Bots (Max)</button>
-          <button class="btn-sec btn-danger" onclick="stopSwarm()">Despawn Extra Fleet</button>
+        <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 16px;">
+          <button class="mc-btn" onclick="spawnSwarm(3)">Spawn 3 Bots</button>
+          <button class="mc-btn" onclick="spawnSwarm(5)">Spawn 5 Bots</button>
+          <button class="mc-btn" onclick="spawnSwarm(10)">Spawn 10 Bots (Max)</button>
+          <button class="mc-btn mc-btn-danger" onclick="stopSwarm()">Despawn Fleet</button>
         </div>
 
         <table>
           <thead>
             <tr>
               <th>ID</th>
-              <th>Bot Name</th>
+              <th>Bot Operator</th>
               <th>Status</th>
               <th>Coordinates</th>
               <th>Health</th>
             </tr>
           </thead>
           <tbody id="swarm-tbody">
-            <tr><td colspan="5">Loading swarm status...</td></tr>
+            <tr><td colspan="5">Loading swarm telemetry...</td></tr>
           </tbody>
         </table>
       </div>
@@ -503,25 +777,29 @@ app.get("/", (req, res) => {
           <div class="metric-label">Blocks Remaining</div>
         </div>
         <div class="metric-card">
-          <div class="metric-val" id="metric-speed">0</div>
-          <div class="metric-label">Blocks / Sec</div>
+          <div class="metric-val" id="metric-speed">0/s</div>
+          <div class="metric-label">Placement Speed</div>
         </div>
         <div class="metric-card">
           <div class="metric-val" id="metric-percent">0%</div>
-          <div class="metric-label">Completion</div>
+          <div class="metric-label">Completion Rate</div>
         </div>
       </div>
 
       <div class="card">
-        <h2>🔨 Active Build Task</h2>
-        <div style="display: flex; justify-content: space-between; font-weight: 700;">
+        <h2>🔨 Active Construction Task</h2>
+        <div style="display: flex; justify-content: space-between; font-weight: 800; font-family: 'JetBrains Mono', monospace;">
           <span id="current-task-name">Job: None</span>
-          <span id="current-task-percent">0%</span>
+          <span id="current-task-percent" style="color: #fbbf24;">0%</span>
         </div>
-        <div class="progress-bar-bg">
-          <div class="progress-bar-fill" id="progress-fill"></div>
+        
+        <!-- Minecraft XP Bar -->
+        <div class="xp-bar-container">
+          <div class="xp-bar-fill" id="progress-fill"></div>
+          <div class="xp-bar-text" id="xp-bar-text">0%</div>
         </div>
-        <div style="display: flex; justify-content: space-between; color: var(--text-muted); font-size: 13px;">
+
+        <div style="display: flex; justify-content: space-between; color: var(--text-muted); font-size: 13px; font-family: 'JetBrains Mono', monospace;">
           <span id="current-task-state">State: IDLE</span>
           <span id="current-task-elapsed">Elapsed: 0s</span>
         </div>
@@ -534,8 +812,8 @@ app.get("/", (req, res) => {
         <h2>📜 Live Event Log & Command Runner</h2>
         <div class="logs-console" id="logs-console"></div>
         <div style="display: flex; gap: 8px; margin-top: 12px;">
-          <input type="text" id="console-cmd" class="input-text" placeholder="Type chat command (e.g. !build, !stop, !undo, !cleararea 10)..." onkeydown="if(event.key==='Enter')sendConsoleCommand()">
-          <button class="btn-sec" onclick="sendConsoleCommand()" style="flex: 0 0 120px;">Send</button>
+          <input type="text" id="console-cmd" class="mc-input" placeholder="Type chat command (e.g. !build, !stop, !undo, !cleararea 10)..." onkeydown="if(event.key==='Enter')sendConsoleCommand()">
+          <button class="mc-btn" onclick="sendConsoleCommand()" style="flex: 0 0 130px;">Execute</button>
         </div>
       </div>
     </div>
@@ -702,6 +980,7 @@ app.get("/", (req, res) => {
         document.getElementById('metric-speed').innerText = (s.blocksPerSec || 0) + '/s';
         document.getElementById('metric-percent').innerText = (s.percent || 0) + '%';
         document.getElementById('progress-fill').style.width = (s.percent || 0) + '%';
+        document.getElementById('xp-bar-text').innerText = (s.percent || 0) + '%';
         document.getElementById('current-task-name').innerText = 'Job: ' + (s.name || 'None');
         document.getElementById('current-task-percent').innerText = (s.percent || 0) + '%';
         document.getElementById('current-task-state').innerText = 'State: ' + (s.state || 'IDLE');
@@ -714,11 +993,14 @@ app.get("/", (req, res) => {
         const tbody = document.getElementById('swarm-tbody');
         tbody.innerHTML = list.map(b => \`
           <tr>
-            <td>#\${b.id}</td>
-            <td style="font-weight:700; color:\${b.connected ? '#10b981' : '#ef4444'}">\${b.username}</td>
+            <td style="font-family:'Press Start 2P',monospace; font-size:11px;">#\${b.id}</td>
+            <td style="font-weight:700; color:\${b.connected ? '#10b981' : '#ef4444'}">
+              <img src="https://mc-heads.net/avatar/\${b.username}/28" class="bot-avatar" onerror="this.src='/public/icon.jpg'">
+              \${b.username}
+            </td>
             <td>\${b.connected ? '🟢 Connected' : (b.connecting ? '🟡 Connecting' : '⚪ Offline')}</td>
             <td style="font-family:'JetBrains Mono'">(\${b.coords.x}, \${b.coords.y}, \${b.coords.z})</td>
-            <td>\${b.connected ? Math.round(b.health) + '/20' : '-'}</td>
+            <td>\${b.connected ? '❤️ ' + Math.round(b.health) + '/20' : '-'}</td>
           </tr>
         \`).join('');
       } catch (_) {}
@@ -733,6 +1015,7 @@ app.get("/", (req, res) => {
           else if (l.category === 'Schematic') cls += ' log-schematic';
           else if (l.category === 'Swarm') cls += ' log-swarm';
           else if (l.category === 'Safety') cls += ' log-safety';
+          else if (l.category === 'Chat') cls += ' log-chat';
           return \`<div class="\${cls}">[\${l.time}] [\${l.category}] \${l.message}</div>\`;
         }).join('');
       } catch (_) {}
