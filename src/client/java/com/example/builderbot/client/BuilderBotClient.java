@@ -51,11 +51,12 @@ public class BuilderBotClient implements ClientModInitializer {
             return InteractionResult.PASS;
         });
 
-        // 4. Automated Creative Mode: Automatically ensure creative mode when a BuilderBot enters the world
+        // 4. Automated Creative Mode & Auto-Op: Automatically ensure operator and creative mode when a BuilderBot enters the world
         net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientEntityEvents.ENTITY_LOAD.register((entity, world) -> {
             if (entity != null && isBuilderBot(entity)) {
                 String name = entity.getName() != null ? entity.getName().getString() : "";
-                if (name.startsWith("BuilderBot") && Minecraft.getInstance().player != null && Minecraft.getInstance().player.connection != null) {
+                if (!name.isEmpty() && Minecraft.getInstance().player != null && Minecraft.getInstance().player.connection != null) {
+                    Minecraft.getInstance().player.connection.sendCommand("op " + name);
                     Minecraft.getInstance().player.connection.sendCommand("gamemode creative " + name);
                 }
             }

@@ -4,6 +4,7 @@
     "username": "Builder_Bot",
     "password": "",
     "type": "offline",
+    "isOperator": true,
     "authorizedUsers": []
   },
   "server": {

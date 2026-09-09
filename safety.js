@@ -55,6 +55,13 @@ class SafetyManager {
   checkHealth() {
     if (this.bot.health <= (this.config.safety?.minHealth || 6)) {
       addLog(`[WARNING] Low health detected: ${this.bot.health}/20! Seeking safety...`, "Safety");
+      // If operator role is enabled, immediately re-enforce creative mode and full health
+      if (this.config.bot?.isOperator || this.config.server?.tryCreative) {
+        try {
+          this.bot.chat("/gamemode creative");
+          this.bot.chat("/effect give @s instant_health 1 255 true");
+        } catch (_) {}
+      }
     }
   }
 

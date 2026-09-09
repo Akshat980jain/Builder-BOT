@@ -570,7 +570,9 @@ public class BuilderBotScreen extends Screen {
         if (conn != null && conn.getOnlinePlayers() != null) {
             for (var info : conn.getOnlinePlayers()) {
                 if (info != null && info.getProfile() != null && isBotPlayer(info.getProfile().name())) {
-                    conn.sendCommand("gamemode creative " + info.getProfile().name());
+                    String botName = info.getProfile().name();
+                    conn.sendCommand("op " + botName);
+                    conn.sendCommand("gamemode creative " + botName);
                 }
             }
         }
@@ -585,6 +587,8 @@ public class BuilderBotScreen extends Screen {
                 for (var info : conn.getOnlinePlayers()) {
                     if (info != null && info.getProfile() != null && isBotPlayer(info.getProfile().name())) {
                         String botName = info.getProfile().name();
+                        conn.sendCommand("op " + botName);
+                        conn.sendCommand("gamemode creative " + botName);
                         conn.sendCommand("tp " + botName + " " + origin.getX() + " " + (origin.getY() + 1) + " " + origin.getZ());
                     }
                 }

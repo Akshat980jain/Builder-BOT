@@ -29,6 +29,7 @@ let swarm = null;
 let isReconnecting = false;
 let reconnectTimeoutId = null;
 let connectionTimeoutId = null;  // For startup connection timeout
+let creativeWatchdogInterval = null; // Continuous creative mode watchdog
 
 const botState = {
   connected: false,
@@ -45,6 +46,60 @@ const botState = {
   lastSwarmBuild: null,      // { name, blocks, origin } — to resume after reconnect
   activeBuild: null          // { name, origin, remainingBlocks, placed, total }
 };
+
+const SETTINGS_PATH = path.join(__dirname, "settings.json");
+
+/**
+ * Saves current configuration back to settings.json so operator roles
+ * and preferences persist permanently across server restarts and redeploys.
+ */
+function saveSettings() {
+  try {
+    fs.writeFileSync(SETTINGS_PATH, JSON.stringify(config, null, 2), "utf8");
+    addLog("[Config] settings.json successfully saved.", "General");
+  } catch (err) {
+    console.error("[Config] Error saving settings.json:", err.message);
+  }
+}
+
+/**
+ * Sets the operator role permanently in settings.json and enforces gamemode across the fleet.
+ * Once set, the bot and all swarm bots remain operators until changed.
+ */
+function setOperatorRole(isOp, source = "System") {
+  config.bot = config.bot || {};
+  config.bot.isOperator = !!isOp;
+  saveSettings();
+  addLog(`[Operator] 🛡️ Operator role permanently set to: ${config.bot.isOperator ? "OPERATOR (CREATIVE)" : "SURVIVAL"} (Source: ${source})`, "General");
+
+  if (config.bot.isOperator) {
+    if (bot && botState.connected) {
+      try { bot.chat("/gamemode creative"); } catch (_) {}
+    }
+    if (swarm && swarm.bots) {
+      for (const [id, entry] of swarm.bots.entries()) {
+        if (id > 1 && entry.bot && entry.connected) {
+          if (bot && botState.connected) {
+            try { bot.chat(`/op ${entry.username}`); } catch (_) {}
+            try { bot.chat(`/gamemode creative ${entry.username}`); } catch (_) {}
+          }
+          try { entry.bot.chat("/gamemode creative"); } catch (_) {}
+        }
+      }
+    }
+  } else {
+    if (bot && botState.connected) {
+      try { bot.chat("/gamemode survival"); } catch (_) {}
+    }
+    if (swarm && swarm.bots) {
+      for (const [id, entry] of swarm.bots.entries()) {
+        if (id > 1 && entry.bot && entry.connected) {
+          try { entry.bot.chat("/gamemode survival"); } catch (_) {}
+        }
+      }
+    }
+  }
+}
 
 const SCHEMATICS_DIR = path.join(__dirname, "schematics");
 if (!fs.existsSync(SCHEMATICS_DIR)) {
@@ -1307,8 +1362,22 @@ async function handleChatCommands(sender, message) {
       break;
     }
 
+    case "op":
+    case "operator": {
+      setOperatorRole(true, sender);
+      bot.chat(`[Role] 👑 Operator role permanently SAVED for ${bot.username} and fleet until !deop is called.`);
+      break;
+    }
+
+    case "deop":
+    case "survival": {
+      setOperatorRole(false, sender);
+      bot.chat(`[Role] 🛡️ Operator role revoked. Bots reverted to Survival mode.`);
+      break;
+    }
+
     case "help": {
-      bot.chat("[Commands] !schematics, !schematic <name> [x y z] [rot], !cleararea <rad> <h>, !stop, !undo, !pause, !resume, !coords, !come, !fly, !swarm <count>");
+      bot.chat("[Commands] !op, !deop, !schematics, !schematic <name> [x y z] [rot], !cleararea <rad> <h>, !stop, !undo, !pause, !resume, !coords, !come, !fly, !swarm <count>");
       break;
     }
   }
@@ -1358,6 +1427,10 @@ function destroyBot() {
     }
     try { builder.stop("Bot destroyed for reconnect"); } catch (_) {}
     builder = null;
+  }
+  if (creativeWatchdogInterval) {
+    clearInterval(creativeWatchdogInterval);
+    creativeWatchdogInterval = null;
   }
 }
 
@@ -1464,16 +1537,35 @@ function createBuilderBot() {
       }, 4000);
     }
 
-    // ── CREATIVE MODE ────────────────────────────────────────────────────
-    if (serverConfig.tryCreative) {
+    // ── PERMANENT OPERATOR & CREATIVE ENFORCEMENT ───────────────────────
+    if (config.bot?.isOperator || serverConfig.tryCreative) {
+      try {
+        bot.chat("/gamemode creative");
+        addLog("[Gamemode] Enforcing /gamemode creative (Permanent Operator Role)", "General");
+      } catch (_) {}
+
       setTimeout(() => {
         if (bot && botState.connected && bot.game?.gameMode !== "creative") {
-          try {
-            bot.chat("/gamemode creative");
-            addLog("[Gamemode] Attempted /gamemode creative (requires OP)", "General");
-          } catch (_) {}
+          try { bot.chat("/gamemode creative"); } catch (_) {}
+        }
+      }, 3000);
+
+      setTimeout(() => {
+        if (bot && botState.connected && bot.game?.gameMode !== "creative") {
+          try { bot.chat("/gamemode creative"); } catch (_) {}
         }
       }, 6000);
+
+      // Continuous Operator Watchdog: keeps bot in creative mode 24/7
+      if (creativeWatchdogInterval) clearInterval(creativeWatchdogInterval);
+      creativeWatchdogInterval = setInterval(() => {
+        if (bot && botState.connected && (config.bot?.isOperator || serverConfig.tryCreative)) {
+          if (bot.game && bot.game.gameMode !== "creative") {
+            addLog("[Operator] Re-enforcing Creative Mode...", "General");
+            try { bot.chat("/gamemode creative"); } catch (_) {}
+          }
+        }
+      }, 4000);
     }
 
     // ── ACTIVE BUILD RESUME (SOLO / PRIMARY) ─────────────────────────────
@@ -1539,6 +1631,25 @@ function createBuilderBot() {
     ) {
       addLog("👑 Bot confirmed in Creative Mode.", "General");
     }
+
+    // ── AUTOMATIC OPERATOR STATUS TRACKING ──────────────────────────────────
+    // Detect OP granted by server console, admin, or player
+    if (
+      message.includes("You are now an operator") ||
+      message.includes("commands.op.success") ||
+      /made\s+.+\s+a\s+server\s+operator/i.test(message) ||
+      /granted\s+.+\s+operator\s+status/i.test(message)
+    ) {
+      addLog("👑 [Operator] Detected OP grant from server! Permanently locked in code.", "General");
+      setOperatorRole(true, "Server OP Grant");
+    } else if (
+      message.includes("You are no longer an operator") ||
+      message.includes("commands.deop.success") ||
+      /made\s+.+\s+no\s+longer\s+a\s+server\s+operator/i.test(message)
+    ) {
+      addLog("⚠️ [Operator] Detected OP revoke from server.", "General");
+      setOperatorRole(false, "Server DEOP");
+    }
   });
 
   // ── CHAT ────────────────────────────────────────────────────────────────
@@ -1555,7 +1666,7 @@ function createBuilderBot() {
     if (cmdIndex !== -1) {
       const potentialCmd = text.substring(cmdIndex).trim();
       const firstWord = potentialCmd.slice(1).split(/\s+/)[0].toLowerCase();
-      const validCmds = ["schematic", "schematics", "build", "list", "stop", "stopall", "cancel", "pause", "resume", "undo", "come", "tp", "fly", "despawn", "despawnall", "cleararea", "status"];
+      const validCmds = ["schematic", "schematics", "build", "list", "stop", "stopall", "cancel", "pause", "resume", "undo", "come", "tp", "fly", "despawn", "despawnall", "cleararea", "status", "op", "operator", "deop", "survival"];
       if (validCmds.includes(firstWord)) {
         let sender = "ChatUser";
         const prefix = text.substring(0, cmdIndex);
@@ -1584,10 +1695,10 @@ function createBuilderBot() {
         // Swarm bots were actively joining from the same IP when the primary was kicked
         botState.proxyKick = true;
         addLog(
-          `[Auth] Proxy kick during active swarm fleet (was online ${(onlineTime / 1000).toFixed(0)}s). Reconnecting in 15s.`,
+          `[Auth] Proxy kick during active swarm fleet (was online ${(onlineTime / 1000).toFixed(0)}s). Reconnecting in 45s to allow server to fully release ghost connection.`,
           "General"
         );
-        rescheduleReconnect(15000);
+        rescheduleReconnect(45000);
       } else {
         // Server or proxy still has the previous session registered.
         // Minecraft keepalive ping timeout is 30-45s. We wait 60s so Aternos
