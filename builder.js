@@ -79,6 +79,8 @@ class BuilderManager {
     this._mcDataCache = null;
     this.placeDelayMs = this.config.builder?.placeDelayMs || 40;
     this.creativeDelayMs = this.config.builder?.creativeDelayMs || 25;
+    this.canUseSetblock = true;
+    this.lastCommandTime = 0;
   }
 
   _mcData() {
@@ -225,6 +227,17 @@ class BuilderManager {
       this.bot.chat(`[Builder] Starting "${name}" (${worldBlocks.length} blocks) at (${origin.x}, ${origin.y}, ${origin.z})`);
     } catch (_) {}
 
+    // Teleport bot to origin if far away (> 16 blocks) so chunks are loaded
+    const curPos = this.bot.entity ? this.bot.entity.position : new Vec3(0, 64, 0);
+    const distToOrigin = curPos.distanceTo(origin);
+    if (distToOrigin > 16) {
+      addLog(`[Builder] Bot is ${Math.round(distToOrigin)} blocks away from origin. Teleporting to build site...`, "Builder");
+      try {
+        this.bot.chat(`/tp ${this.bot.username} ${origin.x} ${origin.y + 2} ${origin.z}`);
+      } catch (_) {}
+      await sleep(1500); // Allow chunks around the bot to load
+    }
+
     // Attempt creative mode if not already in creative (only works if bot has OP)
     if (this.bot && typeof this.bot.chat === "function" && this.bot.game?.gameMode !== "creative") {
       try { this.bot.chat("/gamemode creative"); } catch (_) {}
@@ -267,6 +280,19 @@ class BuilderManager {
           if (this.bot.canDigBlock(cur)) {
             try { await withTimeout(this.bot.dig(cur), 1000); } catch (_) {}
           }
+        }
+      }
+
+      // Keep bot in reach of active placement voxel (within 3.5 blocks) in creative mode
+      if (this.bot.entity && this.bot.game?.gameMode === "creative") {
+        const dist = this.bot.entity.position.distanceTo(target.pos);
+        if (dist > 4.2) {
+          const hoverPos = new Vec3(target.pos.x, Math.max(target.pos.y + 1.5, this.currentJob.origin ? this.currentJob.origin.y + 1 : 65), target.pos.z + 1.5);
+          try {
+            if (this.bot.creative && typeof this.bot.creative.flyTo === "function") {
+              await this.bot.creative.flyTo(hoverPos);
+            }
+          } catch (_) {}
         }
       }
 
@@ -380,6 +406,16 @@ class BuilderManager {
    * Fallback using server /setblock command
    */
   async _setblockFallback(pos, stateStr) {
+    if (!this.canUseSetblock) return false;
+
+    // Rate-limit: minimum 250ms between chat commands to prevent spam kicks
+    const now = Date.now();
+    const elapsed = now - this.lastCommandTime;
+    if (elapsed < 250) {
+      await sleep(250 - elapsed);
+    }
+    this.lastCommandTime = Date.now();
+
     const x = Math.floor(pos.x);
     const y = Math.floor(pos.y);
     const z = Math.floor(pos.z);
@@ -393,7 +429,7 @@ class BuilderManager {
           this.bot.removeListener("message", onMsg);
           resolve(true); // Treat as placed to keep pipelining smooth
         }
-      }, 350);
+      }, 400);
 
       const onMsg = (jsonMsg) => {
         const text = jsonMsg.toString().toLowerCase();
@@ -404,11 +440,18 @@ class BuilderManager {
             this.bot.removeListener("message", onMsg);
             resolve(true);
           }
-        } else if (text.includes("could not set") || text.includes("no permission") || text.includes("unknown block")) {
+        } else if (text.includes("no permission") || text.includes("unknown or incomplete") || text.includes("unknown command") || text.includes("could not set")) {
           if (!resolved) {
             resolved = true;
             clearTimeout(timeout);
             this.bot.removeListener("message", onMsg);
+            if (text.includes("no permission") || text.includes("unknown")) {
+              this.canUseSetblock = false;
+              addLog("[Builder] ❌ /setblock requires OP permission. Disabling /setblock fallback.", "Builder");
+              try {
+                this.bot.chat(`[Builder] ❌ Bot needs OP for /setblock. Please run '/op ${this.bot.username}' in server console.`);
+              } catch (_) {}
+            }
             resolve(false);
           }
         }

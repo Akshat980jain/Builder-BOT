@@ -163,11 +163,25 @@ app.post("/api/build/start", async (req, res) => {
 
     if (swarmCount && Number(swarmCount) > 1 && swarm) {
       await swarm.spawnSwarm(Number(swarmCount));
+      addLog(`[Build API] Gathering ${swarmCount} bots at build site...`, "Swarm");
+      // Wait for workers to connect
+      for (let w = 0; w < 10; w++) {
+        await new Promise((r) => setTimeout(r, 1000));
+        const ready = Array.from(swarm.bots.values()).filter((b) => b.connected && b.bot && b.bot.entity).length;
+        if (ready >= Number(swarmCount)) break;
+      }
+      // Teleport all connected bots to targetOrigin
+      for (const entry of swarm.bots.values()) {
+        if (entry.connected && entry.bot) {
+          try { entry.bot.chat(`/tp ${entry.username} ${targetOrigin.x} ${targetOrigin.y + 2} ${targetOrigin.z}`); } catch (_) {}
+        }
+      }
+      await new Promise((r) => setTimeout(r, 1000));
       swarm.startSwarmBuild(jobName, blocks, targetOrigin);
-      addLog(`[Build API] Dispatched build across ${swarmCount} swarm bots.`, "Builder");
+      addLog(`[Build API] Dispatched build "${jobName}" across active bots at (${targetOrigin.x}, ${targetOrigin.y}, ${targetOrigin.z}).`, "Builder");
     } else {
       builder.startBuild(jobName, blocks, targetOrigin);
-      addLog(`[Build API] Started build "${jobName}" (${blocks.length} blocks).`, "Builder");
+      addLog(`[Build API] Started build "${jobName}" (${blocks.length} blocks) at (${targetOrigin.x}, ${targetOrigin.y}, ${targetOrigin.z}).`, "Builder");
     }
 
     res.json({ success: true, message: `Build "${jobName}" launched (${blocks.length} blocks).` });
@@ -689,9 +703,9 @@ app.get("/", (req, res) => {
 
           <h3>🤖 Workforce Scale</h3>
           <select id="swarm-count-select">
-            <option value="1">1 Bot (Solo Builder)</option>
+            <option value="1" selected>1 Bot (Solo Builder - Recommended for Aternos)</option>
             <option value="2">2 Bots (Duo Team)</option>
-            <option value="3" selected>3 Bots (Trio Squad)</option>
+            <option value="3">3 Bots (Trio Squad)</option>
             <option value="5">5 Bots (Fast Strike Team)</option>
             <option value="10">10 Bots (Full Swarm - 10x Speed)</option>
           </select>
@@ -1179,12 +1193,27 @@ async function handleChatCommands(sender, message) {
           bot.chat(`[Swarm] ⚠️ NOTE: Aternos may briefly kick Builder_Bot when swarm bots join from same IP. It will auto-reconnect in ~15s.`);
 
           await swarm.spawnSwarm(swarmCount);
-          // Give swarm bots time to connect and auth before dispatching build
-          await new Promise((r) => setTimeout(r, 4000));
+          bot.chat(`[Swarm] Gathering ${swarmCount} bots at build site...`);
+
+          // Wait for workers to connect
+          for (let w = 0; w < 12; w++) {
+            await new Promise((r) => setTimeout(r, 1000));
+            const readyCount = Array.from(swarm.bots.values()).filter((b) => b.connected && b.bot && b.bot.entity).length;
+            if (readyCount >= swarmCount) break;
+          }
+
+          // Teleport all connected bots to the build origin so chunks are loaded
+          for (const entry of swarm.bots.values()) {
+            if (entry.connected && entry.bot) {
+              try { entry.bot.chat(`/tp ${entry.username} ${origin.x} ${origin.y + 2} ${origin.z}`); } catch (_) {}
+            }
+          }
+          await new Promise((r) => setTimeout(r, 1000));
+
           swarm.startSwarmBuild(jobName, blocks, origin);
           botState.lastSwarmBuild = null; // Clear if we got here without being kicked
           if (bot && botState.connected) {
-            bot.chat(`[Builder] 🚀 Dispatched "${jobName}" (${blocks.length} blocks) across ${swarmCount} swarm bots!`);
+            bot.chat(`[Builder] 🚀 Dispatched "${jobName}" (${blocks.length} blocks) across active swarm bots!`);
           }
         } else {
           builder.startBuild(jobName, blocks, origin);
