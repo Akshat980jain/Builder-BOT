@@ -47,7 +47,7 @@
     "enabled": true,
     "targetCount": 10,
     "autoSpawnAll": false,
-    "staggerJoinDelay": 6000,
+    "staggerJoinDelay": 10000,
     "autoAuthPassword": "chalol78",
     "antiAfk": true
   },

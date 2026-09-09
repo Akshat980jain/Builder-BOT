@@ -177,8 +177,12 @@ class SwarmManager {
 
       let authHandled = false;
       let authTimeout = null;
+      let spawnHandled = false;
 
       workerBot.once("spawn", () => {
+        if (spawnHandled) return;
+        spawnHandled = true;
+
         entry.connected = true;
         entry.connecting = false;
         entry.reconnectAttempts = 0;
@@ -186,21 +190,21 @@ class SwarmManager {
 
         this.addLog(`[Swarm] 🟢 Bot #${id} (${username}) spawned and ready!`, "Swarm");
 
-        // Failsafe auto-auth if no prompt received
+        // Failsafe auto-auth if no prompt received in 4s
         authTimeout = setTimeout(() => {
           if (!authHandled && workerBot) {
             authHandled = true;
             try { workerBot.chat(`/login ${this.authPassword}`); } catch (_) {}
           }
-        }, 3500);
+        }, 4000);
 
-        // Delayed gamemode attempt
+        // Delayed gamemode attempt (after auth has completed)
         if (this.serverConfig.tryCreative) {
           setTimeout(() => {
             if (workerBot && workerBot.game?.gameMode !== "creative") {
               try { workerBot.chat("/gamemode creative"); } catch (_) {}
             }
-          }, 5000);
+          }, 7000);
         }
 
         resolve(true);
@@ -227,6 +231,13 @@ class SwarmManager {
           if (typeof reason === "object") kickReason = JSON.stringify(reason);
         } catch (_) {}
         this.addLog(`[Swarm] ⚠️ Bot #${id} kicked: ${kickReason}`, "Swarm");
+
+        // Mark duplicate_login so reconnect waits 25s for session expiry
+        const rStr = String(kickReason).toLowerCase();
+        if (rStr.includes("duplicate_login") || rStr.includes("already connected")) {
+          entry.isDuplicateLogin = true;
+          this.addLog(`[Swarm] ⚠️ Bot #${id} duplicate session - will wait 25s before reconnect`, "Swarm");
+        }
       });
 
       workerBot.on("error", (err) => {
@@ -241,7 +252,11 @@ class SwarmManager {
 
         if (this.isSupervisorRunning && id <= this.targetBots) {
           entry.reconnectAttempts++;
-          const delay = Math.min(10000 * Math.pow(1.25, entry.reconnectAttempts), 60000);
+          let delay = Math.min(10000 * Math.pow(1.25, entry.reconnectAttempts), 60000);
+          if (entry.isDuplicateLogin) {
+            delay = Math.max(delay, 25000);
+            entry.isDuplicateLogin = false;
+          }
           this.enqueueReconnect(id, delay);
         }
       });

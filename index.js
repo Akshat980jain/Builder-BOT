@@ -1059,25 +1059,76 @@ async function handleChatCommands(sender, message) {
     case "build": {
       if (parts.length === 0) {
         bot.chat("Usage: !schematic <number|name> [x y z] [rot 0|90|180|270]");
+        bot.chat("Tip: For names with spaces, use the number from !schematics");
         return;
       }
 
-      // Check if swarm subcommand: !schematic swarm <count> <name> [x y z] [rot]
+      // Check if swarm subcommand: !schematic swarm <count> <name_or_number> [x y z] [rot]
       let swarmCount = 1;
       if (parts[0].toLowerCase() === "swarm") {
         parts.shift();
         swarmCount = parseInt(parts.shift(), 10) || 3;
       }
 
-      const query = parts.shift();
       const files = listSchematicFiles();
-      let matchedFile = null;
 
+      // Smart parser: scan from the END of parts for optional rotation (single number)
+      // then coordinates (3 numbers), then treat everything before as the schematic name.
+      // This handles schematic names with spaces correctly.
+      let coordParts = [];
+      let rotation = 0;
+      let remaining = [...parts];
+
+      // Check if last token could be rotation (single number: 0, 90, 180, 270)
+      if (remaining.length >= 1) {
+        const maybeRot = parseInt(remaining[remaining.length - 1], 10);
+        if (!isNaN(maybeRot) && [0, 90, 180, 270].includes(maybeRot) && remaining.length > 1) {
+          // Check if the 4 tokens before are a valid coordinate triplet
+          const maybeZ = parseInt(remaining[remaining.length - 2], 10);
+          const maybeY = parseInt(remaining[remaining.length - 3], 10);
+          const maybeX = parseInt(remaining[remaining.length - 4], 10);
+          if (!isNaN(maybeX) && !isNaN(maybeY) && !isNaN(maybeZ) && remaining.length >= 4) {
+            rotation = maybeRot;
+            coordParts = [maybeX, maybeY, maybeZ];
+            remaining = remaining.slice(0, remaining.length - 4);
+          }
+        }
+      }
+
+      // If rotation wasn't found above, check if last 3 tokens are coordinates
+      if (coordParts.length === 0 && remaining.length >= 3) {
+        const maybeX = parseInt(remaining[remaining.length - 3], 10);
+        const maybeY = parseInt(remaining[remaining.length - 2], 10);
+        const maybeZ = parseInt(remaining[remaining.length - 1], 10);
+        if (!isNaN(maybeX) && !isNaN(maybeY) && !isNaN(maybeZ)) {
+          coordParts = [maybeX, maybeY, maybeZ];
+          remaining = remaining.slice(0, remaining.length - 3);
+        }
+      }
+
+      // remaining now contains only the schematic name (possibly multi-word)
+      const query = remaining.join(" ").trim();
+      if (!query) {
+        bot.chat("Usage: !schematic <number|name> [x y z] [rot 0|90|180|270]");
+        return;
+      }
+
+      // Match by index number first, then by partial name
+      let matchedFile = null;
       const num = parseInt(query, 10);
       if (!isNaN(num) && num >= 1 && num <= files.length) {
         matchedFile = files[num - 1];
       } else {
-        matchedFile = files.find((f) => f.toLowerCase().includes(query.toLowerCase()));
+        // Fuzzy match: try full match, then word-by-word
+        matchedFile = files.find((f) => f.toLowerCase().replace(/\.(litematic|nbt|schematic|schem)$/i, "") === query.toLowerCase());
+        if (!matchedFile) {
+          matchedFile = files.find((f) => f.toLowerCase().includes(query.toLowerCase()));
+        }
+        if (!matchedFile) {
+          // Match by first word of query (for partial names)
+          const firstWord = query.split(/\s+/)[0].toLowerCase();
+          matchedFile = files.find((f) => f.toLowerCase().includes(firstWord));
+        }
       }
 
       if (!matchedFile) {
@@ -1085,18 +1136,23 @@ async function handleChatCommands(sender, message) {
         return;
       }
 
-      let origin = bot.entity ? bot.entity.position.floored() : new Vec3(0, 64, 0);
-      let rotation = 0;
+      // Build origin from parsed coordinates or default to bot's position
+      let origin;
+      if (coordParts.length === 3) {
+        origin = new Vec3(coordParts[0], coordParts[1], coordParts[2]);
+      } else {
+        origin = bot.entity ? bot.entity.position.floored() : new Vec3(0, 64, 0);
+      }
 
-      if (parts.length >= 3) {
-        origin = new Vec3(parseInt(parts[0], 10), parseInt(parts[1], 10), parseInt(parts[2], 10));
-        if (parts[3]) rotation = parseInt(parts[3], 10) || 0;
-      } else if (parts.length === 1) {
-        rotation = parseInt(parts[0], 10) || 0;
+      // Validate origin — NaN coordinates crash the builder
+      if (isNaN(origin.x) || isNaN(origin.y) || isNaN(origin.z)) {
+        bot.chat(`[Builder] ❌ Invalid coordinates! Use: !schematic <name> <x> <y> <z>`);
+        return;
       }
 
       try {
         const fullPath = path.join(SCHEMATICS_DIR, matchedFile);
+        bot.chat(`[Builder] Loading "${matchedFile}"...`);
         const blocks = await loadSchematicFile(fullPath, rotation);
         if (!blocks || blocks.length === 0) {
           bot.chat(`[Builder] Error: Schematic "${matchedFile}" contained 0 blocks.`);
@@ -1104,8 +1160,12 @@ async function handleChatCommands(sender, message) {
         }
 
         const jobName = matchedFile.replace(/\.(litematic|nbt|schem|schematic)$/i, "");
+        bot.chat(`[Builder] ✅ Loaded "${jobName}" (${blocks.length} blocks) → Building at (${origin.x}, ${origin.y}, ${origin.z}) rot:${rotation}°`);
+
         if (swarmCount > 1 && swarm) {
           await swarm.spawnSwarm(swarmCount);
+          // Give swarm bots time to connect before dispatching build
+          await new Promise((r) => setTimeout(r, 3000));
           swarm.startSwarmBuild(jobName, blocks, origin);
           bot.chat(`[Builder] 🚀 Dispatched "${jobName}" (${blocks.length} blocks) across ${swarmCount} swarm bots!`);
         } else {
