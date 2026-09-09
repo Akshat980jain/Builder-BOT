@@ -39,7 +39,10 @@ const botState = {
   health: 20,
   food: 20,
   wasThrottled: false,
-  isDuplicateLogin: false
+  isDuplicateLogin: false,   // kicked before/during auth (old session from prev deploy)
+  proxyKick: false,          // kicked WHILE ONLINE due to Aternos proxy when swarm joins
+  spawnTime: null,           // timestamp when bot last fully spawned
+  lastSwarmBuild: null       // { name, blocks, origin } — to resume after reconnect
 };
 
 const SCHEMATICS_DIR = path.join(__dirname, "schematics");
@@ -1163,11 +1166,26 @@ async function handleChatCommands(sender, message) {
         bot.chat(`[Builder] ✅ Loaded "${jobName}" (${blocks.length} blocks) → Building at (${origin.x}, ${origin.y}, ${origin.z}) rot:${rotation}°`);
 
         if (swarmCount > 1 && swarm) {
+          // Stability check: Aternos proxy kicks the primary when new bots join from same IP.
+          // Warn the user but proceed — the primary will auto-reconnect in 15s and the swarm continues.
+          const onlineTime = botState.spawnTime ? Date.now() - botState.spawnTime : 0;
+          if (onlineTime < 20000) {
+            bot.chat(`[Swarm] ⚠️ Bot is only ${Math.ceil(onlineTime / 1000)}s old — swarm join may cause a brief disconnect. Primary will auto-reconnect.`);
+          }
+
+          // Save the build so primary bot can re-dispatch after proxy kick reconnect
+          botState.lastSwarmBuild = { name: jobName, blocks, origin };
+
+          bot.chat(`[Swarm] ⚠️ NOTE: Aternos may briefly kick Builder_Bot when swarm bots join from same IP. It will auto-reconnect in ~15s.`);
+
           await swarm.spawnSwarm(swarmCount);
-          // Give swarm bots time to connect before dispatching build
-          await new Promise((r) => setTimeout(r, 3000));
+          // Give swarm bots time to connect and auth before dispatching build
+          await new Promise((r) => setTimeout(r, 4000));
           swarm.startSwarmBuild(jobName, blocks, origin);
-          bot.chat(`[Builder] 🚀 Dispatched "${jobName}" (${blocks.length} blocks) across ${swarmCount} swarm bots!`);
+          botState.lastSwarmBuild = null; // Clear if we got here without being kicked
+          if (bot && botState.connected) {
+            bot.chat(`[Builder] 🚀 Dispatched "${jobName}" (${blocks.length} blocks) across ${swarmCount} swarm bots!`);
+          }
         } else {
           builder.startBuild(jobName, blocks, origin);
         }
@@ -1176,6 +1194,7 @@ async function handleChatCommands(sender, message) {
       }
       break;
     }
+
 
     case "stop":
     case "stopall":
@@ -1282,9 +1301,9 @@ async function handleChatCommands(sender, message) {
 // ============================================================
 
 /**
- * Cleanly destroys an old bot instance so no ghost session lingers on the server.
- * Aternos keeps the old session alive for ~8-12s — we must call bot.end() BEFORE
- * reconnecting, then wait for the server to expire the session.
+ * Cleanly tears down the current bot so no ghost session lingers on Aternos.
+ * Aternos proxy may keep sessions alive for 15-30s after TCP disconnect.
+ * We MUST destroy the old bot before creating a new one.
  */
 function destroyBot() {
   if (connectionTimeoutId) {
@@ -1293,7 +1312,10 @@ function destroyBot() {
   }
   if (bot) {
     try { bot.removeAllListeners(); } catch (_) {}
-    try { bot.end(); } catch (_) {}
+    // Try proper MC disconnect packet first, fall back to raw socket close
+    try { bot.quit("Reconnecting"); } catch (_) {
+      try { bot.end(); } catch (_) {}
+    }
     bot = null;
   }
   if (safety) {
@@ -1306,57 +1328,69 @@ function destroyBot() {
   }
 }
 
+/**
+ * Main bot factory. Guards against double-creation with both `isReconnecting`
+ * and `botState.connected` checks.
+ */
 function createBuilderBot() {
-  if (isReconnecting) return;
+  // Hard guards: never create a second bot while reconnecting or already online
+  if (isReconnecting) {
+    addLog("[Bot] createBuilderBot skipped — already reconnecting", "General");
+    return;
+  }
+  if (botState.connected) {
+    addLog("[Bot] createBuilderBot skipped — bot is already connected", "General");
+    return;
+  }
 
-  // Destroy the previous bot instance to prevent duplicate_login and ghost sessions
+  // Destroy any lingering previous bot before creating the new one
   destroyBot();
 
   const serverConfig = config.server || {};
-  const botConfig = config.bot || {};
-  const username = botConfig.username || "Builder_Bot";
+  const botConfig   = config.bot    || {};
+  const username    = botConfig.username || "Builder_Bot";
 
   addLog(`Connecting ${username} to ${serverConfig.ip}:${serverConfig.port} (v${serverConfig.version || "1.21.4"})...`, "General");
 
   try {
     bot = mineflayer.createBot({
-      host: serverConfig.ip,
-      port: serverConfig.port,
+      host:                 serverConfig.ip,
+      port:                 serverConfig.port,
       username,
-      version: serverConfig.version || "1.21.4",
+      version:              serverConfig.version || "1.21.4",
       checkTimeoutInterval: 120000,
-      hideErrors: true
+      hideErrors:           true
     });
   } catch (err) {
-    addLog(`[Error] Failed to initialize Mineflayer bot: ${err.message}`, "General");
+    addLog(`[Error] Failed to initialize bot: ${err.message}`, "General");
     scheduleReconnect();
     return;
   }
 
-  safety = new SafetyManager(bot, config);
+  safety  = new SafetyManager(bot, config);
   builder = new BuilderManager(bot, config, safety);
 
   if (!swarm) {
     swarm = new SwarmManager(serverConfig, addLog, () => {});
   }
 
-  // Connection timeout: if we haven't spawned within 90s, something is wrong
+  // Watchdog: kick the reconnect loop if we never receive a spawn within 90s
   connectionTimeoutId = setTimeout(() => {
     if (!botState.connected) {
-      addLog("[Timeout] No spawn received in 90s — restarting connection...", "General");
+      addLog("[Timeout] No spawn received in 90s — forcing reconnect", "General");
       botState.wasThrottled = true;
       destroyBot();
       scheduleReconnect();
     }
   }, 90000);
 
-  let authHandled = false;
-  let authTimeout = null;
+  let authHandled  = false;
+  let authTimeout  = null;
   let spawnHandled = false;
 
+  // ── SPAWN ──────────────────────────────────────────────────────────────
   bot.once("spawn", () => {
-    // Guard against double spawn (can happen on some proxy servers)
-    if (spawnHandled) return;
+    if (spawnHandled) return;   // Guard against duplicate spawn packets from proxies
     spawnHandled = true;
 
     if (connectionTimeoutId) {
@@ -1364,28 +1398,30 @@ function createBuilderBot() {
       connectionTimeoutId = null;
     }
 
-    botState.connected = true;
+    botState.connected         = true;
     botState.reconnectAttempts = 0;
-    botState.isDuplicateLogin = false;
-    isReconnecting = false;
+    botState.isDuplicateLogin  = false;
+    botState.proxyKick         = false;
+    botState.spawnTime         = Date.now();
+    isReconnecting             = false;
 
     addLog(`🟢 ${username} successfully spawned in world!`, "General");
 
-    // Initialize safety
+    // Activate safety systems
     safety.init();
 
-    // Register with swarm supervisor
+    // Register primary slot in the swarm fleet map
     swarm.registerPrimaryBot(bot, builder, safety);
 
-    // Reactive auth: if no server auth prompt is detected in 4s, use failsafe
+    // ── AUTH FAILSAFE ────────────────────────────────────────────────────
     const authConfig = config.utils?.["auto-auth"];
     if (authConfig && authConfig.enabled) {
       authTimeout = setTimeout(() => {
         if (!authHandled && bot && botState.connected) {
           authHandled = true;
-          addLog("[Auth] No server prompt detected after 4s, sending /login failsafe...", "General");
+          addLog("[Auth] No server prompt in 4s — sending /login failsafe", "General");
           try { bot.chat(`/login ${authConfig.password}`); } catch (_) {}
-          // Then try /register 3s later (in case account doesn't exist yet)
+          // Register fallback 3s later if account didn't exist
           setTimeout(() => {
             if (bot && botState.connected && !authHandled) {
               try { bot.chat(`/register ${authConfig.password} ${authConfig.password}`); } catch (_) {}
@@ -1395,7 +1431,7 @@ function createBuilderBot() {
       }, 4000);
     }
 
-    // Creative mode: attempt 6s after spawn (after auth should be done)
+    // ── CREATIVE MODE ────────────────────────────────────────────────────
     if (serverConfig.tryCreative) {
       setTimeout(() => {
         if (bot && botState.connected && bot.game?.gameMode !== "creative") {
@@ -1406,9 +1442,26 @@ function createBuilderBot() {
         }
       }, 6000);
     }
+
+    // ── SWARM BUILD RESUME ───────────────────────────────────────────────
+    // If the primary bot was kicked mid-swarm and rejoined, resume the build
+    // after a short stabilization delay so auth can complete first.
+    if (botState.lastSwarmBuild) {
+      const pendingBuild = botState.lastSwarmBuild;
+      addLog(`[Swarm] Primary reconnected — resuming swarm build "${pendingBuild.name}" in 15s...`, "Swarm");
+      setTimeout(async () => {
+        if (bot && botState.connected && swarm) {
+          try {
+            swarm.startSwarmBuild(pendingBuild.name, pendingBuild.blocks, pendingBuild.origin);
+            addLog(`[Swarm] ♻️ Resumed build "${pendingBuild.name}" across active swarm bots`, "Swarm");
+          } catch (_) {}
+        }
+        botState.lastSwarmBuild = null;
+      }, 15000);
+    }
   });
 
-  // Reactive auth on server message strings
+  // ── REACTIVE AUTH ───────────────────────────────────────────────────────
   bot.on("messagestr", (message) => {
     const authConfig = config.utils?.["auto-auth"];
     if (authConfig && authConfig.enabled && !authHandled) {
@@ -1416,16 +1469,15 @@ function createBuilderBot() {
       if (msg.includes("/register") || msg.includes("register ") || msg.includes("비밀번호")) {
         authHandled = true;
         if (authTimeout) { clearTimeout(authTimeout); authTimeout = null; }
-        addLog("[Auth] Detected register prompt - sending /register", "General");
+        addLog("[Auth] Detected register prompt — sending /register", "General");
         try { bot.chat(`/register ${authConfig.password} ${authConfig.password}`); } catch (_) {}
       } else if (msg.includes("/login") || msg.includes("login ") || msg.includes("로그인")) {
         authHandled = true;
         if (authTimeout) { clearTimeout(authTimeout); authTimeout = null; }
-        addLog("[Auth] Detected login prompt - sending /login", "General");
+        addLog("[Auth] Detected login prompt — sending /login", "General");
         try { bot.chat(`/login ${authConfig.password}`); } catch (_) {}
       }
     }
-
     if (
       message.includes("commands.gamemode.success.self") ||
       message.includes("Set own game mode to Creative Mode") ||
@@ -1435,49 +1487,55 @@ function createBuilderBot() {
     }
   });
 
+  // ── CHAT ────────────────────────────────────────────────────────────────
   bot.on("chat", (sender, message) => {
     if (sender === bot.username) return;
-    if (config.utils?.["chat-log"]) {
-      addLog(`<${sender}> ${message}`, "Chat");
-    }
+    if (config.utils?.["chat-log"]) addLog(`<${sender}> ${message}`, "Chat");
     handleChatCommands(sender, message);
   });
 
   bot.on("message", (jsonMsg) => {
     const text = jsonMsg.toString().trim();
     if (!text) return;
-    if (text.startsWith("!")) {
-      handleChatCommands("System", text);
-    }
+    if (text.startsWith("!")) handleChatCommands("System", text);
   });
 
+  // ── KICKED ─────────────────────────────────────────────────────────────
   bot.on("kicked", (reason) => {
     let kickReason = reason;
-    try {
-      if (typeof reason === "object") kickReason = JSON.stringify(reason);
-    } catch (_) {}
+    try { if (typeof reason === "object") kickReason = JSON.stringify(reason); } catch (_) {}
     addLog(`⚠️ [Kicked] Bot was kicked by server: ${kickReason}`, "General");
     console.error(`[General] ⚠️ Bot was kicked: ${kickReason}`);
 
-    const rStr = String(kickReason).toLowerCase();
+    const rStr       = String(kickReason).toLowerCase();
+    const onlineTime = botState.spawnTime ? Date.now() - botState.spawnTime : 0;
 
-    // duplicate_login: old session still alive — need extra wait for Aternos to expire it
     if (rStr.includes("duplicate_login") || rStr.includes("already connected")) {
-      addLog("[Auth] Duplicate session detected — will wait 25s for Aternos to expire old session.", "General");
-      botState.isDuplicateLogin = true;
+      if (onlineTime > 20000) {
+        // Bot was stable for 20+ seconds then got kicked — this is Aternos's proxy
+        // kicking us because a SWARM BOT joined from the same IP. No lingering
+        // old session to wait for — use a short (15s) reconnect delay.
+        botState.proxyKick = true;
+        addLog(
+          `[Auth] Proxy kick detected (was online ${(onlineTime / 1000).toFixed(0)}s) — ` +
+          `likely caused by swarm bot joining same IP. Reconnecting in 15s.`,
+          "General"
+        );
+      } else {
+        // Kicked immediately/soon after joining — there's an old session still alive
+        // (e.g. from previous Render deployment). Must wait 45s for Aternos to expire it.
+        botState.isDuplicateLogin = true;
+        addLog("[Auth] Startup duplicate session detected — waiting 45s for Aternos to expire old session.", "General");
+      }
     }
 
-    if (
-      rStr.includes("throttl") ||
-      rStr.includes("wait") ||
-      rStr.includes("too fast") ||
-      rStr.includes("flying") ||
-      rStr.includes("econnreset")
-    ) {
+    if (rStr.includes("throttl") || rStr.includes("wait") || rStr.includes("too fast") ||
+        rStr.includes("flying")  || rStr.includes("econnreset")) {
       botState.wasThrottled = true;
     }
   });
 
+  // ── ERRORS ─────────────────────────────────────────────────────────────
   bot.on("error", (err) => {
     const msg = err.message || String(err);
     addLog(`[Bot Error] ${msg}`, "General");
@@ -1486,27 +1544,42 @@ function createBuilderBot() {
     }
   });
 
+  // ── END ────────────────────────────────────────────────────────────────
   bot.on("end", (reason) => {
     botState.connected = false;
+    botState.spawnTime = null;
     addLog(`🔴 Bot disconnected from server: ${reason}`, "General");
     scheduleReconnect();
   });
 }
 
+/**
+ * Schedules a reconnect with smart delay selection:
+ * - isDuplicateLogin (startup ghost): 45s
+ * - proxyKick (Aternos proxy kicked us due to swarm bot): 15s
+ * - wasThrottled (rate limit, flying, etc.): 15s
+ * - normal disconnect: exponential backoff from settings
+ */
 function scheduleReconnect() {
   if (isReconnecting || !config.utils?.["auto-reconnect"]) return;
   isReconnecting = true;
 
   botState.reconnectAttempts++;
   const base = config.utils?.["auto-reconnect-delay"] || 10000;
-  const max = config.utils?.["max-reconnect-delay"] || 60000;
-  let delay = Math.min(base * Math.pow(1.25, botState.reconnectAttempts - 1), max);
+  const max  = config.utils?.["max-reconnect-delay"]  || 60000;
+  let delay  = Math.min(base * Math.pow(1.25, botState.reconnectAttempts - 1), max);
 
   if (botState.isDuplicateLogin) {
-    // Must wait for Aternos to expire the old session (typically 15-25s)
-    delay = Math.max(delay, 25000);
+    // Old session from previous deploy still alive on Aternos proxy
+    delay = Math.max(delay, 45000);
     botState.isDuplicateLogin = false;
-    addLog(`[Reconnect] Waiting 25s for Aternos to expire duplicate session before reconnecting...`, "General");
+    addLog("[Reconnect] Waiting 45s for Aternos to expire ghost session...", "General");
+  } else if (botState.proxyKick) {
+    // Kicked by Aternos proxy when a swarm bot from same IP joined
+    // No old session to expire — reconnect quickly
+    delay = 15000;
+    botState.proxyKick = false;
+    addLog("[Reconnect] Proxy kick — reconnecting in 15s...", "General");
   } else if (botState.wasThrottled) {
     delay = Math.max(delay, 15000);
     botState.wasThrottled = false;
@@ -1524,7 +1597,8 @@ function scheduleReconnect() {
 process.on("uncaughtException", (err) => {
   const msg = err.message || String(err);
   addLog(`[Handled Error] ${msg}`, "General");
-  if (msg.includes("ECONNRESET") || msg.includes("ETIMEDOUT") || msg.includes("EPIPE") || msg.includes("PartialReadError")) {
+  if (msg.includes("ECONNRESET") || msg.includes("ETIMEDOUT") ||
+      msg.includes("EPIPE")      || msg.includes("PartialReadError")) {
     botState.wasThrottled = true;
   }
   if (!bot || !botState.connected) {
@@ -1536,6 +1610,7 @@ process.on("unhandledRejection", (reason) => {
   addLog(`[Handled Warning] ${reason}`, "General");
 });
 
+
 // ============================================================
 // START SERVER & BOT
 // ============================================================
@@ -1545,3 +1620,6 @@ app.listen(PORT, "0.0.0.0", () => {
 });
 
 createBuilderBot();
+
+
+
