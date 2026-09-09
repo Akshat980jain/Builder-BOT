@@ -301,14 +301,51 @@ class SwarmManager {
     }
 
     const botCount = activeBots.length;
-    this.addLog(`[Swarm] 🚀 Distributing build "${name}" (${blocks.length} blocks) across ${botCount} bots...`, "Swarm");
+    this.addLog(`[Swarm] 🚀 Distributing build "${name}" (${blocks.length} blocks) across ${botCount} bots (all building from the ground up)...`, "Swarm");
 
-    // Partition blocks by horizontal slices along the X axis
-    const chunkSize = Math.ceil(blocks.length / botCount);
+    if (botCount === 1) {
+      const worker = activeBots[0];
+      worker.activeJob = { name, slice: blocks, originPos };
+      return [worker.builder.startBuild(name, blocks, originPos)];
+    }
+
+    // Partition blocks territorially (X or Z horizontal columns)
+    // so EVERY bot builds its own column from the bottom ground layer upward!
+    let minX = Infinity, maxX = -Infinity;
+    let minZ = Infinity, maxZ = -Infinity;
+    for (const b of blocks) {
+      if (b.pos.x < minX) minX = b.pos.x;
+      if (b.pos.x > maxX) maxX = b.pos.x;
+      if (b.pos.z < minZ) minZ = b.pos.z;
+      if (b.pos.z > maxZ) maxZ = b.pos.z;
+    }
+
+    const spanX = maxX - minX;
+    const spanZ = maxZ - minZ;
+    const splitAxis = spanX >= spanZ ? "x" : "z";
+    const minVal = splitAxis === "x" ? minX : minZ;
+    const maxVal = splitAxis === "x" ? maxX : maxZ;
+    const step = (maxVal - minVal + 1) / botCount;
+
     const promises = [];
 
     for (let i = 0; i < botCount; i++) {
-      const slice = blocks.slice(i * chunkSize, (i + 1) * chunkSize);
+      const start = minVal + i * step;
+      const end = (i === botCount - 1) ? maxVal + 1 : minVal + (i + 1) * step;
+
+      const slice = blocks.filter((b) => {
+        const val = splitAxis === "x" ? b.pos.x : b.pos.z;
+        return val >= start && val < end;
+      });
+
+      // CRITICAL: Sort EVERY bot's slice strictly from bottom to top (Y ascending)
+      // This ensures all bots start on the ground at the bottom and help upward together!
+      slice.sort((a, b) => {
+        if (a.pos.y !== b.pos.y) return a.pos.y - b.pos.y;
+        if (a.pos.z !== b.pos.z) return a.pos.z - b.pos.z;
+        return a.pos.x - b.pos.x;
+      });
+
       if (slice.length > 0) {
         const worker = activeBots[i];
         const partName = `${name}-part${i + 1}`;

@@ -98,7 +98,7 @@ class BuilderManager {
     return {
       name: this.currentJob.name,
       origin: this.currentJob.origin,
-      remainingBlocks: [...this.queue],
+      remainingBlocks: this.queue.map((b) => ({ ...b, isWorldPos: true })),
       placed: this.currentJob.placed,
       total: this.currentJob.total,
       percent: this.currentJob.percent
@@ -208,9 +208,10 @@ class BuilderManager {
 
     const origin = originPos ? new Vec3(originPos.x, originPos.y, originPos.z) : (this.bot.entity ? this.bot.entity.position.floored() : new Vec3(0, 64, 0));
 
-    // Convert relative blocks into absolute world coordinates
+    // Convert relative blocks into absolute world coordinates (avoid double-offset if already absolute)
     const worldBlocks = blocks.map((b) => ({
-      pos: origin.plus(b.pos),
+      pos: b.isWorldPos ? b.pos.clone() : origin.plus(b.pos),
+      isWorldPos: true,
       name: b.name,
       properties: b.properties || {},
       blockState: b.blockState || b.name
@@ -279,6 +280,14 @@ class BuilderManager {
     const maxFails = Math.max(total * 4, 1000);
 
     while (this.queue.length > 0 && !this.shouldStop && !this.isPaused && consecutiveFails < maxFails) {
+      // Guard: if bot is disconnected or socket ended, pause immediately and keep remaining blocks in queue
+      if (!this.bot || !this.bot.entity || !this.bot._client || this.bot._client.state !== "play") {
+        this.isPaused = true;
+        this.state = "PAUSED";
+        addLog("[Builder] Connection lost mid-build — pausing queue to preserve remaining blocks.", "Builder");
+        break;
+      }
+
       const target = this.queue.shift();
       if (!target) break;
 

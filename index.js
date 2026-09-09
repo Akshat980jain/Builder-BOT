@@ -1347,17 +1347,19 @@ function destroyBot() {
     safety = null;
   }
   if (builder) {
-    if (builder.state === "BUILDING") {
+    if (builder.state === "BUILDING" || builder.state === "PAUSED") {
       const active = builder.getActiveJob();
       if (active && active.remainingBlocks && active.remainingBlocks.length > 0) {
-        botState.activeBuild = {
-          name: active.name,
-          origin: active.origin,
-          remainingBlocks: active.remainingBlocks,
-          total: active.total,
-          placed: active.placed
-        };
-        addLog(`[Builder] 💾 Saved active build state "${active.name}" (${active.remainingBlocks.length} blocks left) for auto-resume upon reconnect.`, "Builder");
+        if (!botState.activeBuild) {
+          botState.activeBuild = {
+            name: active.name,
+            origin: active.origin,
+            remainingBlocks: active.remainingBlocks,
+            total: active.total,
+            placed: active.placed
+          };
+          addLog(`[Builder] 💾 Saved active build state "${active.name}" (${active.remainingBlocks.length} blocks left) for auto-resume upon reconnect.`, "Builder");
+        }
       }
     }
     try { builder.stop("Bot destroyed for reconnect"); } catch (_) {}
@@ -1607,6 +1609,21 @@ function createBuilderBot() {
     botState.connected = false;
     botState.spawnTime = null;
     addLog(`🔴 Bot disconnected from server: ${reason}`, "General");
+
+    // Immediately preserve active build job so it survives reconnect
+    if (builder && (builder.state === "BUILDING" || builder.state === "PAUSED")) {
+      const active = builder.getActiveJob();
+      if (active && active.remainingBlocks && active.remainingBlocks.length > 0) {
+        botState.activeBuild = {
+          name: active.name,
+          origin: active.origin,
+          remainingBlocks: active.remainingBlocks,
+          total: active.total,
+          placed: active.placed
+        };
+        addLog(`[Builder] 💾 Preserved active build "${active.name}" (${active.remainingBlocks.length} blocks remaining) on disconnect.`, "Builder");
+      }
+    }
 
     // Defer scheduleReconnect so that if a 'kicked' packet was received
     // simultaneously, its handler runs first and categorizes the delay.
