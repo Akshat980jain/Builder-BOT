@@ -1369,15 +1369,30 @@ async function handleChatCommands(sender, message) {
       break;
     }
 
-    case "deop":
-    case "survival": {
-      setOperatorRole(false, sender);
-      bot.chat(`[Role] 🛡️ Operator role revoked. Bots reverted to Survival mode.`);
+    case "bot":
+    case "!bot": {
+      // Syntax: !bot <botName/id> <subcommand...>
+      if (parts.length < 2) {
+        bot.chat("Usage: !bot <name/id> <schematic / stop / come / fly / undo / status / despawn>");
+        return;
+      }
+      const targetIdentifier = parts[0];
+      const subCommand = parts.slice(1).join(" ");
+      const isMain = targetIdentifier.toLowerCase() === "builder_bot" || 
+                     targetIdentifier === "1" || 
+                     targetIdentifier.toLowerCase() === "builderbot";
+      if (isMain) {
+        await handleChatCommands(sender, subCommand);
+      } else {
+        if (swarm) {
+          await swarm.executeBotCommand(targetIdentifier, sender, subCommand);
+        }
+      }
       break;
     }
 
     case "help": {
-      bot.chat("[Commands] !op, !deop, !schematics, !schematic <name> [x y z] [rot], !cleararea <rad> <h>, !stop, !undo, !pause, !resume, !coords, !come, !fly, !swarm <count>");
+      bot.chat("[Commands] !bot <name> <cmd>, !op, !deop, !schematics, !schematic <name> [x y z] [rot], !cleararea <rad> <h>, !stop, !undo, !pause, !resume, !coords, !come, !fly, !swarm <count>");
       break;
     }
   }
@@ -1666,7 +1681,7 @@ function createBuilderBot() {
     if (cmdIndex !== -1) {
       const potentialCmd = text.substring(cmdIndex).trim();
       const firstWord = potentialCmd.slice(1).split(/\s+/)[0].toLowerCase();
-      const validCmds = ["schematic", "schematics", "build", "list", "stop", "stopall", "cancel", "pause", "resume", "undo", "come", "tp", "fly", "despawn", "despawnall", "cleararea", "status", "op", "operator", "deop", "survival"];
+      const validCmds = ["schematic", "schematics", "build", "list", "stop", "stopall", "cancel", "pause", "resume", "undo", "come", "tp", "fly", "despawn", "despawnall", "cleararea", "status", "op", "operator", "deop", "survival", "bot"];
       if (validCmds.includes(firstWord)) {
         let sender = "ChatUser";
         const prefix = text.substring(0, cmdIndex);

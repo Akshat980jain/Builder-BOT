@@ -1,10 +1,23 @@
 "use strict";
 
+const path = require("path");
+const fs = require("fs");
 const mineflayer = require("mineflayer");
 const { Vec3 } = require("vec3");
 const BuilderManager = require("./builder");
 const SafetyManager = require("./safety");
+const { loadSchematicFile } = require("./schematic");
 const config = require("./settings.json");
+
+const SCHEMATICS_DIR = path.join(__dirname, "schematics");
+
+function listSchematics() {
+  try {
+    return fs.readdirSync(SCHEMATICS_DIR).filter((f) => /\.(litematic|nbt|schem|schematic)$/i.test(f));
+  } catch (_) {
+    return [];
+  }
+}
 
 class SwarmManager {
   constructor(serverConfig, addLogCallback, broadcastStateCallback) {
@@ -403,6 +416,158 @@ class SwarmManager {
       }
     }
     return list;
+  }
+
+  /**
+   * Executes an individual command specifically for ANY bot in the swarm (1..10)
+   */
+  async executeBotCommand(targetIdentifier, sender, commandLine) {
+    let targetId = parseInt(targetIdentifier, 10);
+    if (isNaN(targetId)) {
+      const match = String(targetIdentifier).match(/(\d+)/);
+      if (match) {
+        targetId = parseInt(match[1], 10);
+      } else if (String(targetIdentifier).toLowerCase().includes("builder_bot") || String(targetIdentifier).toLowerCase() === "builderbot") {
+        targetId = 1;
+      }
+    }
+
+    if (isNaN(targetId) || targetId < 1 || targetId > this.maxBots) {
+      this.addLog(`[Swarm] Unknown bot identifier: ${targetIdentifier}`, "Swarm");
+      return false;
+    }
+
+    let entry = this.bots.get(targetId);
+
+    // Auto-connect worker bot on demand if not yet spawned
+    if ((!entry || !entry.connected) && targetId >= 2) {
+      this.addLog(`[Swarm] Auto-connecting ${this.getBotName(targetId)} on demand for individual command...`, "Swarm");
+      await this.connectWorkerBot(targetId);
+      entry = this.bots.get(targetId);
+      await new Promise((r) => setTimeout(r, 2500));
+    }
+
+    if (!entry || !entry.bot || !entry.connected) {
+      const p = this.bots.get(1);
+      if (p && p.bot) {
+        p.bot.chat(`[Swarm] ⚠️ Bot #${targetId} (${this.getBotName(targetId)}) is offline or still connecting.`);
+      }
+      return false;
+    }
+
+    const { bot: wBot, builder: wBuilder } = entry;
+    const parts = commandLine.trim().split(/\s+/);
+    const trigger = parts[0].replace(/^!/, "").toLowerCase();
+    const args = parts.slice(1);
+
+    switch (trigger) {
+      case "schematic":
+      case "build": {
+        let rawArgs = args.join(" ").trim();
+        let coordParts = null;
+        let rotation = 0;
+        const rotCoordsRegex = /\s+(-?\d+)\s+(-?\d+)\s+(-?\d+)\s+(0|90|180|270)\s*$/;
+        const coordsOnlyRegex = /\s+(-?\d+)\s+(-?\d+)\s+(-?\d+)\s*$/;
+
+        let m = rawArgs.match(rotCoordsRegex);
+        if (m) {
+          coordParts = [parseInt(m[1], 10), parseInt(m[2], 10), parseInt(m[3], 10)];
+          rotation = parseInt(m[4], 10);
+          rawArgs = rawArgs.substring(0, m.index).trim();
+        } else if ((m = rawArgs.match(coordsOnlyRegex))) {
+          coordParts = [parseInt(m[1], 10), parseInt(m[2], 10), parseInt(m[3], 10)];
+          rotation = 0;
+          rawArgs = rawArgs.substring(0, m.index).trim();
+        }
+
+        const files = listSchematics();
+        let selectedFile = null;
+        const num = parseInt(rawArgs, 10);
+        if (!isNaN(num) && num >= 1 && num <= files.length) {
+          selectedFile = files[num - 1];
+        } else {
+          selectedFile = files.find((f) => f.toLowerCase().includes(rawArgs.toLowerCase()));
+        }
+
+        if (!selectedFile) {
+          wBot.chat(`[${entry.username}] Schematic "${rawArgs}" not found in library.`);
+          return false;
+        }
+
+        const fullPath = path.join(SCHEMATICS_DIR, selectedFile);
+        const blocks = await loadSchematicFile(fullPath, rotation);
+        if (!blocks || blocks.length === 0) {
+          wBot.chat(`[${entry.username}] Could not load blocks for ${selectedFile}.`);
+          return false;
+        }
+
+        let origin = coordParts ? new Vec3(coordParts[0], coordParts[1], coordParts[2]) : (wBot.entity ? wBot.entity.position.floored() : new Vec3(0, 64, 0));
+        try { wBot.chat(`/gamemode creative`); } catch (_) {}
+        try { wBot.chat(`/tp ${entry.username} ${origin.x} ${origin.y + 2} ${origin.z}`); } catch (_) {}
+        await new Promise((r) => setTimeout(r, 1200));
+
+        wBot.chat(`🏗️ [${entry.username}] Starting individual build: "${selectedFile}" (${blocks.length} blocks) at (${origin.x}, ${origin.y}, ${origin.z}) [Rot: ${rotation}°]`);
+        wBuilder.startBuild(selectedFile, blocks, origin);
+        return true;
+      }
+
+      case "stop":
+      case "cancel": {
+        if (wBuilder) wBuilder.stop("Stop requested by user");
+        wBot.chat(`[${entry.username}] ⏹ Build stopped.`);
+        return true;
+      }
+
+      case "come":
+      case "tp": {
+        const targetPlayer = wBot.players[sender];
+        if (targetPlayer && targetPlayer.entity) {
+          const p = targetPlayer.entity.position.floored();
+          wBot.chat(`/tp ${entry.username} ${p.x} ${p.y} ${p.z}`);
+        } else {
+          wBot.chat(`[${entry.username}] Cannot locate player "${sender}".`);
+        }
+        return true;
+      }
+
+      case "fly": {
+        if (wBot.game?.gameMode === "creative") {
+          try {
+            wBot.creative.startFlying();
+            wBot.chat(`[${entry.username}] 🕊 Creative flight activated.`);
+          } catch (e) {
+            wBot.chat(`[${entry.username}] Flight error: ${e.message}`);
+          }
+        } else {
+          wBot.chat(`[${entry.username}] Bot is not in creative mode.`);
+        }
+        return true;
+      }
+
+      case "undo": {
+        if (wBuilder) {
+          wBuilder.undoLastBuild();
+          wBot.chat(`[${entry.username}] ⏪ Reversing last build...`);
+        }
+        return true;
+      }
+
+      case "status": {
+        const s = wBuilder ? wBuilder.getStatus() : { active: false };
+        if (s.active) {
+          wBot.chat(`[${entry.username}] Building: "${s.name}" | ${s.placed}/${s.total} (${s.percent}%)`);
+        } else {
+          wBot.chat(`[${entry.username}] Idle. Health: ${Math.round(wBot.health || 20)}/20. Creative: ${wBot.game?.gameMode === "creative"}`);
+        }
+        return true;
+      }
+
+      case "despawn": {
+        this.despawnBot(targetId);
+        return true;
+      }
+    }
+    return false;
   }
 }
 

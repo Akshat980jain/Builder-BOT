@@ -106,10 +106,11 @@ public class BuilderBotClient implements ClientModInitializer {
         }
 
         if (isBuilderBot(entity)) {
-            BuilderBotMod.LOGGER.info("[BuilderBot] Opening BuilderBotScreen for: " + entity.getName().getString());
+            String botName = entity.getName() != null ? entity.getName().getString() : "Builder_Bot";
+            BuilderBotMod.LOGGER.info("[BuilderBot] Opening BuilderBotScreen for: " + botName);
             BuilderBotScreen.ensureBotsInCreative();
             Minecraft.getInstance().execute(() -> {
-                Minecraft.getInstance().setScreenAndShow(new BuilderBotScreen(entity));
+                Minecraft.getInstance().setScreenAndShow(new BuilderBotScreen(entity, botName));
             });
             return true;
         }
