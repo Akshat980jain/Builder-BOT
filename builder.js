@@ -81,6 +81,8 @@ class BuilderManager {
     this.creativeDelayMs = this.config.builder?.creativeDelayMs || 25;
     this.canUseSetblock = true;
     this.lastCommandTime = 0;
+    this.isWorker = Boolean(this.config.isWorker);
+    this.scaffoldHistory = [];
   }
 
   _mcData() {
@@ -90,6 +92,17 @@ class BuilderManager {
       } catch (_) {}
     }
     return this._mcDataCache;
+  }
+
+  getActiveJob() {
+    return {
+      name: this.currentJob.name,
+      origin: this.currentJob.origin,
+      remainingBlocks: [...this.queue],
+      placed: this.currentJob.placed,
+      total: this.currentJob.total,
+      percent: this.currentJob.percent
+    };
   }
 
   getStatus() {
@@ -122,6 +135,7 @@ class BuilderManager {
    * Broadcasts chat progress message for in-game players and BuilderBotClient HUD
    */
   broadcastProgress(placed, total, left, percent) {
+    if (this.isWorker) return; // Mute worker bots in server chat
     if (!this.bot || typeof this.bot.chat !== "function") return;
     try {
       this.bot.chat(`[Builder] Building: ${placed}/${total} placed (${percent}%) - ${left} remaining`);
@@ -143,11 +157,11 @@ class BuilderManager {
       } catch (_) {}
     }
     addLog(`[Builder] Build stopped: ${reason}`, "Builder");
-    try {
-      if (this.bot && typeof this.bot.chat === "function") {
+    if (!this.isWorker && this.bot && typeof this.bot.chat === "function") {
+      try {
         this.bot.chat(`[Builder] Build stopped: ${reason}`);
-      }
-    } catch (_) {}
+      } catch (_) {}
+    }
   }
 
   /**
@@ -158,7 +172,9 @@ class BuilderManager {
       this.isPaused = true;
       this.state = "PAUSED";
       addLog("[Builder] Build paused.", "Builder");
-      try { this.bot.chat("[Builder] Build paused."); } catch (_) {}
+      if (!this.isWorker && this.bot && typeof this.bot.chat === "function") {
+        try { this.bot.chat("[Builder] Build paused."); } catch (_) {}
+      }
     }
   }
 
@@ -170,7 +186,9 @@ class BuilderManager {
       this.isPaused = false;
       this.state = "BUILDING";
       addLog("[Builder] Resuming build...", "Builder");
-      try { this.bot.chat("[Builder] Resuming build..."); } catch (_) {}
+      if (!this.isWorker && this.bot && typeof this.bot.chat === "function") {
+        try { this.bot.chat("[Builder] Resuming build..."); } catch (_) {}
+      }
       this._runQueue(onProgress);
     }
   }
@@ -223,27 +241,30 @@ class BuilderManager {
     };
 
     addLog(`[Builder] Starting build "${name}" (${worldBlocks.length} blocks) at (${origin.x}, ${origin.y}, ${origin.z})`, "Builder");
-    try {
-      this.bot.chat(`[Builder] Starting "${name}" (${worldBlocks.length} blocks) at (${origin.x}, ${origin.y}, ${origin.z})`);
-    } catch (_) {}
+    if (!this.isWorker && this.bot && typeof this.bot.chat === "function") {
+      try {
+        this.bot.chat(`[Builder] Starting "${name}" (${worldBlocks.length} blocks) at (${origin.x}, ${origin.y}, ${origin.z})`);
+      } catch (_) {}
+    }
 
     // Teleport bot to origin if far away (> 16 blocks) so chunks are loaded
     const curPos = this.bot.entity ? this.bot.entity.position : new Vec3(0, 64, 0);
     const distToOrigin = curPos.distanceTo(origin);
     if (distToOrigin > 16) {
       addLog(`[Builder] Bot is ${Math.round(distToOrigin)} blocks away from origin. Teleporting to build site...`, "Builder");
-      try {
-        this.bot.chat(`/tp ${this.bot.username} ${origin.x} ${origin.y + 2} ${origin.z}`);
-      } catch (_) {}
+      if (!this.isWorker && this.bot && typeof this.bot.chat === "function") {
+        try {
+          this.bot.chat(`/tp ${this.bot.username} ${origin.x} ${origin.y + 2} ${origin.z}`);
+        } catch (_) {}
+      }
       await sleep(1500); // Allow chunks around the bot to load
     }
 
     // Attempt creative mode if not already in creative (only works if bot has OP)
-    if (this.bot && typeof this.bot.chat === "function" && this.bot.game?.gameMode !== "creative") {
+    if (!this.isWorker && this.bot && typeof this.bot.chat === "function" && this.bot.game?.gameMode !== "creative") {
       try { this.bot.chat("/gamemode creative"); } catch (_) {}
     }
     await sleep(200);
-    if (this.safety) this.safety.maintainCreativeFlight();
 
     return this._runQueue(onProgress);
   }
@@ -255,7 +276,7 @@ class BuilderManager {
     let placed = this.currentJob.placed;
     const total = this.currentJob.total;
     let consecutiveFails = 0;
-    const maxFails = Math.max(total * 4, 200);
+    const maxFails = Math.max(total * 4, 1000);
 
     while (this.queue.length > 0 && !this.shouldStop && !this.isPaused && consecutiveFails < maxFails) {
       const target = this.queue.shift();
@@ -283,16 +304,11 @@ class BuilderManager {
         }
       }
 
-      // Keep bot in reach of active placement voxel (within 3.5 blocks) in creative mode
-      if (this.bot.entity && this.bot.game?.gameMode === "creative") {
+      // Keep bot in reach of active placement voxel (within 4.2 blocks)
+      if (this.bot.entity) {
         const dist = this.bot.entity.position.distanceTo(target.pos);
         if (dist > 4.2) {
-          const hoverPos = new Vec3(target.pos.x, Math.max(target.pos.y + 1.5, this.currentJob.origin ? this.currentJob.origin.y + 1 : 65), target.pos.z + 1.5);
-          try {
-            if (this.bot.creative && typeof this.bot.creative.flyTo === "function") {
-              await this.bot.creative.flyTo(hoverPos);
-            }
-          } catch (_) {}
+          await this._approachTarget(target.pos);
         }
       }
 
@@ -325,6 +341,7 @@ class BuilderManager {
           this.queue.push(target); // Re-queue to try after supporting blocks are placed
         } else {
           addLog(`[Builder] Skipped unplaceable block at ${target.pos}: ${target.name}`, "Builder");
+          consecutiveFails = 0; // RESET on skip so single skipped block doesn't halt the entire build
         }
       }
 
@@ -334,18 +351,135 @@ class BuilderManager {
       if (delay > 0) await sleep(delay);
     }
 
+    if (this.queue.length > 0 && consecutiveFails >= maxFails && !this.shouldStop) {
+      this.state = "PAUSED";
+      addLog(`[Builder] ⚠️ Build paused: reached max consecutive placement attempts. ${this.queue.length} blocks remain. Click 'Resume' in Web Dashboard to retry.`, "Builder");
+      if (!this.isWorker && this.bot && typeof this.bot.chat === "function") {
+        try {
+          this.bot.chat(`[Builder] ⚠️ Build paused: placement blocked. ${this.queue.length} blocks remain.`);
+        } catch (_) {}
+      }
+    }
+
     if (this.queue.length === 0 && !this.shouldStop && !this.isPaused) {
       this.state = "COMPLETED";
       this.currentJob.left = 0;
       this.currentJob.percent = 100;
       addLog(`[Builder] 🎉 Build "${this.currentJob.name}" completed! Placed ${placed}/${total} blocks.`, "Builder");
-      try {
-        this.bot.chat(`[Builder] Done! Build "${this.currentJob.name}" completed! Placed ${placed}/${total} blocks.`);
-      } catch (_) {}
+      if (!this.isWorker && this.bot && typeof this.bot.chat === "function") {
+        try {
+          this.bot.chat(`[Builder] Done! Build "${this.currentJob.name}" completed! Placed ${placed}/${total} blocks.`);
+        } catch (_) {}
+      }
       if (onProgress) onProgress(placed, total, 0, 100, true);
     }
 
     return { placed, total, completed: this.state === "COMPLETED", stopped: this.shouldStop };
+  }
+
+  /**
+   * Automatically equips or provisions the requested item in hand
+   */
+  async _ensureHeldItem(rawName) {
+    const bot = this.bot;
+    const cleanName = rawName.replace(/^minecraft:/, "").toLowerCase();
+    const itemName = blockToItemName(rawName);
+
+    let item = bot.inventory.items().find((i) => i.name === itemName || i.name === cleanName);
+
+    if (!item && bot.game?.gameMode === "creative") {
+      try {
+        const mcData = this._mcData();
+        const itemEntry = mcData?.itemsByName[itemName] || mcData?.blocksByName[cleanName];
+        if (itemEntry && typeof bot.creative?.setInventorySlot === "function") {
+          const ItemClass = PrismarineItem(bot.version || "1.21.4");
+          await withTimeout(bot.creative.setInventorySlot(36, new ItemClass(itemEntry.id, 64)), 600);
+          await sleep(25);
+          if (typeof bot.setQuickBarSlot === "function") bot.setQuickBarSlot(0);
+          item = bot.inventory.slots[36] || bot.inventory.items().find((i) => i.name === itemName || i.name === cleanName);
+        }
+      } catch (_) {}
+    }
+
+    if (item) {
+      try {
+        await bot.equip(item, "hand");
+        return true;
+      } catch (_) {}
+    }
+    return false;
+  }
+
+  /**
+   * Places a temporary anchor scaffold pillar under pos down to solid ground
+   */
+  async _placeScaffoldUnder(pos) {
+    const bot = this.bot;
+    const scaffoldPos = pos.offset(0, -1, 0);
+    const existing = bot.blockAt(scaffoldPos);
+    if (existing && existing.name && !existing.name.includes("air") && existing.name !== "water" && existing.name !== "lava") {
+      return;
+    }
+
+    // Scan downward up to 16 blocks to find solid ground
+    let groundY = null;
+    for (let y = scaffoldPos.y - 1; y >= Math.max(-60, scaffoldPos.y - 16); y--) {
+      const b = bot.blockAt(new Vec3(scaffoldPos.x, y, scaffoldPos.z));
+      if (b && b.name && !b.name.includes("air") && b.name !== "water" && b.name !== "lava") {
+        groundY = y;
+        break;
+      }
+    }
+
+    if (groundY !== null) {
+      await this._ensureHeldItem("cobblestone");
+      for (let y = groundY; y < scaffoldPos.y; y++) {
+        const belowBlock = bot.blockAt(new Vec3(scaffoldPos.x, y, scaffoldPos.z));
+        if (!belowBlock || belowBlock.name.includes("air")) break;
+        const targetVoxel = new Vec3(scaffoldPos.x, y + 1, scaffoldPos.z);
+        const curVoxel = bot.blockAt(targetVoxel);
+        if (curVoxel && !curVoxel.name.includes("air")) continue;
+
+        try {
+          await bot.placeBlock(belowBlock, new Vec3(0, 1, 0));
+          this.scaffoldHistory.push(targetVoxel);
+          await sleep(25);
+        } catch (_) {
+          break;
+        }
+      }
+    } else if (this.canUseSetblock) {
+      // In mid-air void with no ground within 16 blocks, create an anchor block if /setblock is enabled
+      const cmd = `/setblock ${scaffoldPos.x} ${scaffoldPos.y} ${scaffoldPos.z} cobblestone replace`;
+      try {
+        this.bot.chat(cmd);
+        this.scaffoldHistory.push(scaffoldPos);
+        await sleep(60);
+      } catch (_) {}
+    }
+  }
+
+  /**
+   * Repositions the bot safely near the target placement block without triggering flight kicks
+   */
+  async _approachTarget(targetPos) {
+    const bot = this.bot;
+    if (!bot.entity) return;
+
+    const dx = bot.entity.position.x > targetPos.x ? 2.0 : -2.0;
+    const dz = bot.entity.position.z > targetPos.z ? 2.0 : -2.0;
+    const standPos = new Vec3(targetPos.x + dx, targetPos.y, targetPos.z + dz);
+
+    if (bot.pathfinder) {
+      try {
+        const { goals } = require("mineflayer-pathfinder");
+        await withTimeout(bot.pathfinder.goto(new goals.GoalNear(targetPos.x, targetPos.y, targetPos.z, 3.5)), 1200);
+      } catch (_) {}
+    } else if (bot.game?.gameMode === "creative" && bot.creative && typeof bot.creative.flyTo === "function") {
+      try {
+        await withTimeout(bot.creative.flyTo(standPos), 600);
+      } catch (_) {}
+    }
   }
 
   /**
@@ -366,34 +500,27 @@ class BuilderManager {
     await this._preventCollision(pos);
 
     if (isVanilla) {
-      // Step A: Exact Inventory Match
-      let item = bot.inventory.items().find((i) => i.name === itemName || i.name === cleanName);
-
-      // Step B: Creative Slot Provisioning (Slot 36 / hotbar)
-      if (!item && this.bot.game?.gameMode === "creative") {
+      // Step A & B: Ensure item equipped in hand
+      const hasItem = await this._ensureHeldItem(rawName);
+      if (hasItem) {
+        // Step C: Equip & Native Placement with Auto-Scaffolding
         try {
-          const itemEntry = mcData.itemsByName[itemName] || mcData.blocksByName[cleanName];
-          if (itemEntry && typeof bot.creative?.setInventorySlot === "function") {
-            const ItemClass = PrismarineItem(bot.version || "1.21.4");
-            await withTimeout(bot.creative.setInventorySlot(36, new ItemClass(itemEntry.id, 64)), 600);
-            await sleep(30);
-            if (typeof bot.setQuickBarSlot === "function") bot.setQuickBarSlot(0);
-            item = bot.inventory.slots[36] || bot.inventory.items().find((i) => i.name === itemName || i.name === cleanName);
+          let refInfo = this._findReferenceBlock(pos);
+          if (!refInfo) {
+            // Block is floating! Construct a temporary anchor scaffold column below it
+            await this._placeScaffoldUnder(pos);
+            refInfo = this._findReferenceBlock(pos);
           }
-        } catch (_) {}
-      }
 
-      // Step C: Equip & Native Placement
-      if (item) {
-        try {
-          await bot.equip(item, "hand");
-          const refInfo = this._findReferenceBlock(pos);
           if (refInfo) {
-            await bot.placeBlock(refInfo.refBlock, refInfo.faceVector);
-            return true;
+            const refBlock = bot.blockAt(refInfo.refPos) || refInfo.refBlock;
+            if (refBlock) {
+              await bot.placeBlock(refBlock, refInfo.faceVector);
+              return true;
+            }
           }
-        } catch (_) {
-          // Native failed, fall through to /setblock
+        } catch (nativeErr) {
+          // Native failed (e.g. angle or block collision) — fall through to /setblock
         }
       }
     }
@@ -448,9 +575,11 @@ class BuilderManager {
             if (text.includes("no permission") || text.includes("unknown")) {
               this.canUseSetblock = false;
               addLog("[Builder] ❌ /setblock requires OP permission. Disabling /setblock fallback.", "Builder");
-              try {
-                this.bot.chat(`[Builder] ❌ Bot needs OP for /setblock. Please run '/op ${this.bot.username}' in server console.`);
-              } catch (_) {}
+              if (!this.isWorker && this.bot && typeof this.bot.chat === "function") {
+                try {
+                  this.bot.chat(`[Builder] ❌ Bot needs OP for /setblock. Please run '/op ${this.bot.username}' in server console.`);
+                } catch (_) {}
+              }
             }
             resolve(false);
           }

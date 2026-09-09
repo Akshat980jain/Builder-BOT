@@ -42,7 +42,8 @@ const botState = {
   isDuplicateLogin: false,   // kicked before/during auth (old session from prev deploy)
   proxyKick: false,          // kicked WHILE ONLINE due to Aternos proxy when swarm joins
   spawnTime: null,           // timestamp when bot last fully spawned
-  lastSwarmBuild: null       // { name, blocks, origin } — to resume after reconnect
+  lastSwarmBuild: null,      // { name, blocks, origin } — to resume after reconnect
+  activeBuild: null          // { name, origin, remainingBlocks, placed, total }
 };
 
 const SCHEMATICS_DIR = path.join(__dirname, "schematics");
@@ -180,6 +181,7 @@ app.post("/api/build/start", async (req, res) => {
       swarm.startSwarmBuild(jobName, blocks, targetOrigin);
       addLog(`[Build API] Dispatched build "${jobName}" across active bots at (${targetOrigin.x}, ${targetOrigin.y}, ${targetOrigin.z}).`, "Builder");
     } else {
+      botState.activeBuild = { name: jobName, blocks, origin: targetOrigin, remainingBlocks: blocks };
       builder.startBuild(jobName, blocks, targetOrigin);
       addLog(`[Build API] Started build "${jobName}" (${blocks.length} blocks) at (${targetOrigin.x}, ${targetOrigin.y}, ${targetOrigin.z}).`, "Builder");
     }
@@ -192,6 +194,8 @@ app.post("/api/build/start", async (req, res) => {
 });
 
 app.post("/api/build/stop", (req, res) => {
+  botState.activeBuild = null;
+  botState.lastSwarmBuild = null;
   if (builder) builder.stop("Stopped from Web Dashboard");
   if (swarm) swarm.stopSwarm("Stopped from Web Dashboard");
   res.json({ success: true, message: "Build stopped." });
@@ -1180,20 +1184,8 @@ async function handleChatCommands(sender, message) {
         bot.chat(`[Builder] ✅ Loaded "${jobName}" (${blocks.length} blocks) → Building at (${origin.x}, ${origin.y}, ${origin.z}) rot:${rotation}°`);
 
         if (swarmCount > 1 && swarm) {
-          // Stability check: Aternos proxy kicks the primary when new bots join from same IP.
-          // Warn the user but proceed — the primary will auto-reconnect in 15s and the swarm continues.
-          const onlineTime = botState.spawnTime ? Date.now() - botState.spawnTime : 0;
-          if (onlineTime < 20000) {
-            bot.chat(`[Swarm] ⚠️ Bot is only ${Math.ceil(onlineTime / 1000)}s old — swarm join may cause a brief disconnect. Primary will auto-reconnect.`);
-          }
-
-          // Save the build so primary bot can re-dispatch after proxy kick reconnect
           botState.lastSwarmBuild = { name: jobName, blocks, origin };
-
-          bot.chat(`[Swarm] ⚠️ NOTE: Aternos may briefly kick Builder_Bot when swarm bots join from same IP. It will auto-reconnect in ~15s.`);
-
           await swarm.spawnSwarm(swarmCount);
-          bot.chat(`[Swarm] Gathering ${swarmCount} bots at build site...`);
 
           // Wait for workers to connect
           for (let w = 0; w < 12; w++) {
@@ -1211,11 +1203,12 @@ async function handleChatCommands(sender, message) {
           await new Promise((r) => setTimeout(r, 1000));
 
           swarm.startSwarmBuild(jobName, blocks, origin);
-          botState.lastSwarmBuild = null; // Clear if we got here without being kicked
+          botState.lastSwarmBuild = null;
           if (bot && botState.connected) {
             bot.chat(`[Builder] 🚀 Dispatched "${jobName}" (${blocks.length} blocks) across active swarm bots!`);
           }
         } else {
+          botState.activeBuild = { name: jobName, blocks, origin, remainingBlocks: blocks };
           builder.startBuild(jobName, blocks, origin);
         }
       } catch (err) {
@@ -1228,6 +1221,8 @@ async function handleChatCommands(sender, message) {
     case "stop":
     case "stopall":
     case "cancel": {
+      botState.activeBuild = null;
+      botState.lastSwarmBuild = null;
       if (builder) builder.stop(`Stopped by ${sender}`);
       if (swarm) swarm.stopSwarm(`Stopped by ${sender}`);
       bot.chat("[Builder] 🛑 All building tasks aborted.");
@@ -1352,6 +1347,19 @@ function destroyBot() {
     safety = null;
   }
   if (builder) {
+    if (builder.state === "BUILDING") {
+      const active = builder.getActiveJob();
+      if (active && active.remainingBlocks && active.remainingBlocks.length > 0) {
+        botState.activeBuild = {
+          name: active.name,
+          origin: active.origin,
+          remainingBlocks: active.remainingBlocks,
+          total: active.total,
+          placed: active.placed
+        };
+        addLog(`[Builder] 💾 Saved active build state "${active.name}" (${active.remainingBlocks.length} blocks left) for auto-resume upon reconnect.`, "Builder");
+      }
+    }
     try { builder.stop("Bot destroyed for reconnect"); } catch (_) {}
     builder = null;
   }
@@ -1470,6 +1478,27 @@ function createBuilderBot() {
           } catch (_) {}
         }
       }, 6000);
+    }
+
+    // ── ACTIVE BUILD RESUME (SOLO / PRIMARY) ─────────────────────────────
+    if (botState.activeBuild && botState.activeBuild.remainingBlocks && botState.activeBuild.remainingBlocks.length > 0) {
+      const buildToResume = botState.activeBuild;
+      addLog(`[Builder] ♻️ Reconnected! Resuming build "${buildToResume.name}" (${buildToResume.remainingBlocks.length} blocks remaining) in 7s...`, "Builder");
+      setTimeout(async () => {
+        if (bot && botState.connected && builder) {
+          try {
+            const origin = buildToResume.origin;
+            if (origin) {
+              try { bot.chat(`/tp ${username} ${origin.x} ${origin.y + 2} ${origin.z}`); } catch (_) {}
+              await new Promise((r) => setTimeout(r, 1500));
+            }
+            builder.startBuild(buildToResume.name, buildToResume.remainingBlocks, origin);
+            addLog(`[Builder] ♻️ Successfully resumed build "${buildToResume.name}"!`, "Builder");
+          } catch (err) {
+            addLog(`[Builder Error] Failed resuming build: ${err.message}`, "Builder");
+          }
+        }
+      }, 7000);
     }
 
     // ── SWARM BUILD RESUME ───────────────────────────────────────────────

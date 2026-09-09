@@ -170,7 +170,7 @@ class SwarmManager {
       }
 
       const safety = new SafetyManager(workerBot, config);
-      const builder = new BuilderManager(workerBot, config, safety);
+      const builder = new BuilderManager(workerBot, { ...config, isWorker: true }, safety);
       entry.bot = workerBot;
       entry.safety = safety;
       entry.builder = builder;
@@ -205,6 +205,23 @@ class SwarmManager {
               try { workerBot.chat("/gamemode creative"); } catch (_) {}
             }
           }, 7000);
+        }
+
+        // Auto-resume active swarm job if bot reconnected mid-build
+        if (entry.activeJob && entry.activeJob.slice && entry.activeJob.slice.length > 0) {
+          const job = entry.activeJob;
+          this.addLog(`[Swarm] ♻️ Bot #${id} reconnected! Resuming "${job.name}" (${job.slice.length} blocks remaining) in 8s...`, "Swarm");
+          setTimeout(async () => {
+            if (entry.connected && entry.bot && entry.builder) {
+              try {
+                if (job.originPos) {
+                  try { entry.bot.chat(`/tp ${username} ${job.originPos.x} ${job.originPos.y + 2} ${job.originPos.z}`); } catch (_) {}
+                  await new Promise((r) => setTimeout(r, 1500));
+                }
+                entry.builder.startBuild(job.name, job.slice, job.originPos);
+              } catch (_) {}
+            }
+          }, 8000);
         }
 
         resolve(true);
@@ -247,6 +264,16 @@ class SwarmManager {
       workerBot.on("end", (reason) => {
         entry.connected = false;
         entry.connecting = false;
+        if (entry.builder && entry.builder.state === "BUILDING") {
+          const active = entry.builder.getActiveJob();
+          if (active && active.remainingBlocks && active.remainingBlocks.length > 0) {
+            entry.activeJob = {
+              name: active.name,
+              slice: active.remainingBlocks,
+              originPos: active.origin
+            };
+          }
+        }
         if (safety) safety.destroy();
         this.addLog(`[Swarm] Bot #${id} disconnected: ${reason}`, "Swarm");
 
@@ -284,7 +311,9 @@ class SwarmManager {
       const slice = blocks.slice(i * chunkSize, (i + 1) * chunkSize);
       if (slice.length > 0) {
         const worker = activeBots[i];
-        promises.push(worker.builder.startBuild(`${name}-part${i + 1}`, slice, originPos));
+        const partName = `${name}-part${i + 1}`;
+        worker.activeJob = { name: partName, slice, originPos };
+        promises.push(worker.builder.startBuild(partName, slice, originPos));
       }
     }
 
@@ -293,6 +322,7 @@ class SwarmManager {
 
   stopSwarm(reason = "Swarm stopped") {
     for (const entry of this.bots.values()) {
+      entry.activeJob = null;
       if (entry.builder) entry.builder.stop(reason);
     }
   }

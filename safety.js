@@ -18,14 +18,21 @@ class SafetyManager {
       this.checkHealth();
     });
 
-    if (this.config.safety?.flightProtection) {
-      if (this.flightInterval) clearInterval(this.flightInterval);
-      this.flightInterval = setInterval(() => {
-        this.maintainCreativeFlight();
-      }, 3000);
-    }
+    // Anti-AFK watchdog: sends subtle micro-actions every 30s to prevent Aternos 5-min idle kick
+    if (this.afkInterval) clearInterval(this.afkInterval);
+    this.afkInterval = setInterval(() => {
+      if (this.bot && this.bot.entity) {
+        try {
+          if (typeof this.bot.swingArm === "function") this.bot.swingArm("right");
+          if (typeof this.bot.look === "function") {
+            const smallDelta = (Math.random() * 0.08 - 0.04);
+            this.bot.look(this.bot.entity.yaw + smallDelta, this.bot.entity.pitch, true);
+          }
+        } catch (_) {}
+      }
+    }, 30000);
 
-    addLog("Safety systems activated (Health monitor, Creative flight guard, Lava defense)", "Safety");
+    addLog("Safety systems activated (Health monitor, Anti-AFK guard, Lava defense)", "Safety");
   }
 
   /**
@@ -35,6 +42,10 @@ class SafetyManager {
     if (this.flightInterval) {
       clearInterval(this.flightInterval);
       this.flightInterval = null;
+    }
+    if (this.afkInterval) {
+      clearInterval(this.afkInterval);
+      this.afkInterval = null;
     }
   }
 
