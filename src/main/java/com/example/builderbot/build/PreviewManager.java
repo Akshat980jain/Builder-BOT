@@ -99,6 +99,12 @@ public class PreviewManager {
             default -> Rotation.NONE;
         };
 
+        int minRotX = Integer.MAX_VALUE;
+        int minRotY = Integer.MAX_VALUE;
+        int minRotZ = Integer.MAX_VALUE;
+
+        // Pass 1: rotate and find minimum rotated bounds
+        List<BlockPos> rotatedPositions = new ArrayList<>(originalPlan.getTasks().size());
         for (BuildTask task : originalPlan.getTasks()) {
             BlockPos rel = task.pos().subtract(origin);
             int rx = rel.getX();
@@ -118,9 +124,44 @@ public class PreviewManager {
                 default -> rz;
             };
 
-            BlockPos finalPos = origin.offset(newX, rel.getY(), newZ).offset(offset);
+            rotatedPositions.add(new BlockPos(newX, rel.getY(), newZ));
+            if (newX < minRotX) minRotX = newX;
+            if (rel.getY() < minRotY) minRotY = rel.getY();
+            if (newZ < minRotZ) minRotZ = newZ;
+        }
+
+        // Pass 2: Re-normalize so rotated bounding box starts at (0, 0, 0) relative to origin
+        List<BuildTask> tasks = originalPlan.getTasks();
+        for (int i = 0; i < tasks.size(); i++) {
+            BuildTask task = tasks.get(i);
+            BlockPos rPos = rotatedPositions.get(i);
+            BlockPos finalPos = origin.offset(rPos.getX() - minRotX, rPos.getY() - minRotY, rPos.getZ() - minRotZ).offset(offset);
             BlockState rotatedState = task.state().rotate(rot);
             transformed.add(new BuildTask(finalPos, rotatedState));
+        }
+
+        // Sort bottom-to-top (Y ascending, then Z, then X)
+        transformed.sort((a, b) -> {
+            int cmpY = Integer.compare(a.pos().getY(), b.pos().getY());
+            if (cmpY != 0) return cmpY;
+            int cmpZ = Integer.compare(a.pos().getZ(), b.pos().getZ());
+            if (cmpZ != 0) return cmpZ;
+            return Integer.compare(a.pos().getX(), b.pos().getX());
+        });
+
+        // Re-align so the first placed task block remains exactly at origin (X, Y, Z)
+        if (!transformed.isEmpty()) {
+            BlockPos firstPos = transformed.get(0).pos();
+            int dx = origin.getX() - firstPos.getX();
+            int dy = origin.getY() - firstPos.getY();
+            int dz = origin.getZ() - firstPos.getZ();
+            if (dx != 0 || dy != 0 || dz != 0) {
+                List<BuildTask> aligned = new ArrayList<>(transformed.size());
+                for (BuildTask t : transformed) {
+                    aligned.add(new BuildTask(t.pos().offset(dx, dy, dz), t.state()));
+                }
+                transformed = aligned;
+            }
         }
 
         return new BuildPlan(transformed);

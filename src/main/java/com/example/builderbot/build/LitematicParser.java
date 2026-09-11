@@ -167,6 +167,21 @@ public class LitematicParser {
                 return Integer.compare(a.pos().getX(), b.pos().getX());
             });
 
+            // Re-align so the first placed task block is placed exactly at origin (X, Y, Z)
+            if (!tasks.isEmpty()) {
+                BlockPos firstPos = tasks.get(0).pos();
+                int dx = origin.getX() - firstPos.getX();
+                int dy = origin.getY() - firstPos.getY();
+                int dz = origin.getZ() - firstPos.getZ();
+                if (dx != 0 || dy != 0 || dz != 0) {
+                    List<BuildTask> aligned = new ArrayList<>(tasks.size());
+                    for (BuildTask t : tasks) {
+                        aligned.add(new BuildTask(t.pos().offset(dx, dy, dz), t.state()));
+                    }
+                    tasks = aligned;
+                }
+            }
+
             BuilderBotMod.LOGGER.info("[BuilderBot] Parsed .litematic successfully: {} blocks loaded from {}",
                     tasks.size(), path.getFileName());
             return Optional.of(new BuildPlan(tasks));
@@ -237,6 +252,21 @@ public class LitematicParser {
                 if (cmpZ != 0) return cmpZ;
                 return Integer.compare(a.pos().getX(), b.pos().getX());
             });
+
+            // Re-align so the first placed task block is placed exactly at origin (X, Y, Z)
+            if (!tasks.isEmpty()) {
+                BlockPos firstPos = tasks.get(0).pos();
+                int dx = origin.getX() - firstPos.getX();
+                int dy = origin.getY() - firstPos.getY();
+                int dz = origin.getZ() - firstPos.getZ();
+                if (dx != 0 || dy != 0 || dz != 0) {
+                    List<BuildTask> aligned = new ArrayList<>(tasks.size());
+                    for (BuildTask t : tasks) {
+                        aligned.add(new BuildTask(t.pos().offset(dx, dy, dz), t.state()));
+                    }
+                    tasks = aligned;
+                }
+            }
             return Optional.of(new BuildPlan(tasks));
 
         } catch (Exception e) {

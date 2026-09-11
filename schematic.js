@@ -202,6 +202,20 @@ function finalizeBlocks(rawBlocks, rotationDeg = 0) {
     return a.pos.x - b.pos.x;
   });
 
+  // Anchor the starting block directly to (0, 0, 0) so the build starts exactly at the assigned origin
+  if (finalBlocks.length > 0) {
+    const startX = finalBlocks[0].pos.x;
+    const startY = finalBlocks[0].pos.y;
+    const startZ = finalBlocks[0].pos.z;
+    if (startX !== 0 || startY !== 0 || startZ !== 0) {
+      for (const b of finalBlocks) {
+        b.pos.x -= startX;
+        b.pos.y -= startY;
+        b.pos.z -= startZ;
+      }
+    }
+  }
+
   return finalBlocks;
 }
 
