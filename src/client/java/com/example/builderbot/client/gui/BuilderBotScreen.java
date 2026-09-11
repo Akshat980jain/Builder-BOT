@@ -602,6 +602,7 @@ public class BuilderBotScreen extends Screen {
     public static void ensureBotsInCreative() {
         var conn = Minecraft.getInstance().getConnection();
         if (conn != null && conn.getOnlinePlayers() != null) {
+            conn.sendCommand("gamerule sendCommandFeedback false");
             for (var info : conn.getOnlinePlayers()) {
                 if (info != null && info.getProfile() != null && isBotPlayer(info.getProfile().name())) {
                     String botName = info.getProfile().name();
@@ -614,25 +615,8 @@ public class BuilderBotScreen extends Screen {
 
     private void sendOpPrepCommands(BlockPos origin) {
         var conn = Minecraft.getInstance().getConnection();
-        if (conn != null && conn.getOnlinePlayers() != null) {
-            ensureBotsInCreative();
-
-            if (origin != null) {
-                if (isFleetMode) {
-                    for (var info : conn.getOnlinePlayers()) {
-                        if (info != null && info.getProfile() != null && isBotPlayer(info.getProfile().name())) {
-                            String botName = info.getProfile().name();
-                            conn.sendCommand("op " + botName);
-                            conn.sendCommand("gamemode creative " + botName);
-                            conn.sendCommand("tp " + botName + " " + origin.getX() + " " + (origin.getY() + 1) + " " + origin.getZ());
-                        }
-                    }
-                } else {
-                    conn.sendCommand("op " + targetBotName);
-                    conn.sendCommand("gamemode creative " + targetBotName);
-                    conn.sendCommand("tp " + targetBotName + " " + origin.getX() + " " + (origin.getY() + 1) + " " + origin.getZ());
-                }
-            }
+        if (conn != null) {
+            conn.sendCommand("gamerule sendCommandFeedback false");
         }
     }
 
