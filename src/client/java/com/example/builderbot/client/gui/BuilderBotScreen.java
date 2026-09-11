@@ -1,8 +1,6 @@
 package com.example.builderbot.client.gui;
 
-import com.example.builderbot.build.BuildPlan;
 import com.example.builderbot.build.SchematicManager;
-import com.example.builderbot.entity.BuilderBotEntity;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
 import net.minecraft.ChatFormatting;
@@ -805,7 +803,6 @@ public class BuilderBotScreen extends Screen {
         // Section Headers
         int rightX = winX + 210;
         int rightY = winY + 52;
-        int rightW = winW - 222;
 
         guiGraphics.text(this.font, "📍 Origin (X Y Z)", rightX, rightY + 2, 0xFFFBBF24);
         guiGraphics.text(this.font, "🧭 Orientation", rightX, rightY + 54, 0xFFFBBF24);
